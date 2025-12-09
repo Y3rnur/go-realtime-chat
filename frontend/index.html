@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset = "UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Go Realtime Chat</title>
+        <link rel="stylesheet" href="style.css">
+        <script defer src="script.js"></script>
+    </head>
+    <body>
+        <div class="chat-app" id="app">
+            <aside class="sidebar" id="sidebar" aria-label="Conversations">
+                <header class="sidebar-header">
+                    <h1 class="brand">MyChat</h1>
+                    <button id="new-conv" title="New conversation">+</button>
+                </header>
+
+                <div class="search">
+                    <input id="search" type="search" placeholder="Search or start new..." aria-label="Search conversations"/>
+                </div>
+
+                <ul class="conversations" id="conversations" role="list">
+                    <!-- conversation items should be inserted here -->
+                </ul>
+            </aside>
+
+            <main class="chat" id="chat" aria-live="polite">
+                <header class="chat-header">
+                    <button id="back-btn" class="back-btn" aria-hidden="true">‹</button>
+                    <div class="chat-title">
+                        <img class="avatar" src="" alt="" id="chat-avatar" />
+                        <div>
+                            <div id="chat-name" class="name">Select a conversation</div>
+                            <div id="chat-sub" class="sub">—</div>
+                        </div>
+                    </div>
+                </header>
+
+                <section class="messages" id="messages" role="log" aria-live="polite">
+                    <!-- messages are rendered here -->
+                </section>
+
+                <form id="composer" class="composer" aria-label="Message composer">
+                    <input id="input-msg" type="text" placeholder="Type a message" autocomplete="off" aria-label="Type a message" />
+                    <button id="send" type="submit">Send</button>
+                </form>
+            </main>
+        </div>
+    </body>
+</html>
