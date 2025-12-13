@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/google/uuid"
 
 	"github.com/Y3rnur/go-realtime-chat/backend"
 	"github.com/Y3rnur/go-realtime-chat/backend/store"
@@ -26,6 +29,49 @@ func main() {
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "API Status: OK")
+	})
+
+	// GET /api/conversations?user_id=<uuid>
+	mux.HandleFunc("/api/conversations", func(w http.ResponseWriter, r *http.Request) {
+		userQ := r.URL.Query().Get("user_id")
+		if userQ == "" {
+			http.Error(w, "user_id required", http.StatusBadRequest)
+			return
+		}
+		uid, err := uuid.Parse(userQ)
+		if err != nil {
+			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			return
+		}
+		convs, err := store.GetConversationsForUser(r.Context(), pool, uid, 50)
+		if err != nil {
+			http.Error(w, "database error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(convs)
+	})
+
+	// GET /api/messages?conversation_id=<uuid>&limit=50
+	mux.HandleFunc("/api/messages", func(w http.ResponseWriter, r *http.Request) {
+		cq := r.URL.Query().Get("conversation_id")
+		if cq == "" {
+			http.Error(w, "conversation_id required", http.StatusBadRequest)
+			return
+		}
+		cid, err := uuid.Parse(cq)
+		if err != nil {
+			http.Error(w, "invalid conversation_id", http.StatusBadRequest)
+			return
+		}
+		limit := 50
+		msgs, err := store.GetMessagesForConversation(r.Context(), pool, cid, limit)
+		if err != nil {
+			http.Error(w, "database error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(msgs)
 	})
 
 	handler := backend.LoggingMiddleware(mux)
