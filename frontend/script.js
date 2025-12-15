@@ -74,48 +74,86 @@ async function openConversation(id) {
         state.messages[id] = data;
         const conv = state.convs.find((x) => x.id === id);
         chatNameEl.textContent = conv?.title || "Conversation";
-        renderMessages(id);
+        renderMessages(id, { scrollToBottom: true});
     } catch (err) {
         console.error(err);
         messagesEl.innerHTML = `<div class="error">Could not load messages</div>`;
     }
 }
 
-function renderMessages(convId) {
+function renderMessages(convId, opts = {}) {
     messagesEl.innerHTML = "";
     const list = state.messages[convId] || [];
-    for (const m of list.slice().reverse()) {
+    let lastDate = null;
+
+    for (const m of list) {
+        const d = new Date(m.created_at);
+        const dateKey = d.toISOString().slice(0, 10);
+        if (dateKey !== lastDate) {
+            const dateDiv = document.createElement("div");
+            dateDiv.className = "date-sep";
+            dateDiv.textContent = formatDate(d);
+            messagesEl.appendChild(dateDiv);
+            lastDate = dateKey;
+        }
+
         const div = document.createElement("div");
         const isMe = String(m.author_id) === String(state.me);
         div.className = "msg " + (isMe ? "me" : "them");
-        div.innerHTML = `<div class="text">${escapeHtml(m.body || "")}</div><span class="time">${formatTime(m.created_at)}</span>`;
+
+        const authorLine = !isMe && m.author_name ? `<div class="author">${escapeHtml(m.author_name)}</div>` : "";
+        div.innerHTML = `${authorLine}<div class="text">${escapeHtml(m.body || "")}</div><span class="time">${formatTime(m.created_at)}</span>`;
+        div.setAttribute("data-date", dateKey);
+
         messagesEl.appendChild(div);
     }
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    
+    if (opts.scrollToBottom !== false) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
 }
 
-function onSend(e) {
+async function onSend(e) {
     e.preventDefault();
     const text = inputMsg.value.trim();
     if (!text || !state.active) return;
-    // Below local logic will be replaced later, when the POST will be added (so data message will be sent to backend + db)
-    const msg = {
-        id: "local-" + Date.now(),
-        conversation_id: state.active,
-        author_id: state.me,
-        body: text,
-        created_at: new Date().toISOString(),
-    };
-    state.messages[state.active] = state.messages[state.active] || [];
-    state.messages[state.active].push(msg);
-    renderMessages(state.active);
+
     inputMsg.value = "";
-    // TODO: send to backend (POST)
+
+    try {
+        const res = await fetch("/api/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                conversation_id: state.active,
+                author_id: state.me,
+                body: text,
+            }),
+        });
+
+        if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.error("send message failed", res.status, body);
+            alert("Failed to send message");
+        }
+
+        const saved = await res.json();
+        state.messages[state.active] = state.messages[state.active] || [];
+        state.messages[state.active].push(saved);
+        renderMessages(state.active, { scrollToBottom: true});
+    } catch (err) {
+        console.error("send message error", err);
+        alert("Failed to send message (network)");
+    }
 }
 
 function formatTime(ts) {
     const d = new Date(ts);
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDate(d) {
+    return d.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric"});
 }
 
 function escapeHtml(s) {

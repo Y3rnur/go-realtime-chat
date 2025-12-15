@@ -96,3 +96,15 @@ html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-s
 @media (min-width: 721px){
     .back-btn{display:none}
 }
+
+/* Date separator */
+.date-sep {
+    margin: 12px auto;
+    display: block;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    color: #bfc8d6;
+    border-radius: 999px;
+    font-size: 13px;
+    text-align: center;
+}
