@@ -18,7 +18,10 @@ let state = {
     convs: [],
     active: null,
     messages: {},
+    _messagesReqId: 0,
 };
+
+let messagesFetchController = null;
 
 function init() {
     if (!state.me || state.me === "3e62ced9-275f-4e96-82f1-d505730df6af") {
@@ -62,22 +65,47 @@ function renderConversations() {
 }
 
 async function openConversation(id) {
+    const reqId = ++state._messagesReqId;
+
+    if (messagesFetchController) {{
+        try { messagesFetchController.abort(); } catch (_) {}
+    }}
+    messagesFetchController = new AbortController();
+    const signal = messagesFetchController.signal;
+
     state.active = id;
     renderConversations();
     chatNameEl.textContent = "Loading...";
     sidebar.classList.remove("open");
 
+    messagesEl.innerHTML = `<div class="loading">Loading messages...</div>`;
+
     try {
         const res = await fetch(api.messages(id));
         if (!res.ok) throw new Error("Failed to load messages");
         const data = await res.json();
+
+        if (reqId !== state._messagesReqId || state.active !== id) {
+            return;
+        }
+
         state.messages[id] = data;
         const conv = state.convs.find((x) => x.id === id);
         chatNameEl.textContent = conv?.title || "Conversation";
         renderMessages(id, { scrollToBottom: true});
     } catch (err) {
+        if (err.name === "AbortError") {
+            return;
+        }
         console.error(err);
-        messagesEl.innerHTML = `<div class="error">Could not load messages</div>`;
+        if (state.active === id) {
+            messagesEl.innerHTML = `<div class="error">Could not load messages</div>`;
+            chatNameEl.textContent = "Conversation";
+        }
+    } finally {
+        if (messagesFetchController && messagesFetchController.signal === signal) {
+            messagesFetchController = null;
+        }
     }
 }
 

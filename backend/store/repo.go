@@ -67,7 +67,7 @@ func GetMessagesForConversation(ctx context.Context, pool *pgxpool.Pool, convID 
 	FROM (
 		SELECT * FROM messages
 		WHERE conversation_id = $1
-		ORDER BY created_at ASC
+		ORDER BY created_at DESC
 		LIMIT $2
 	) m
 	LEFT JOIN users u ON u.id = m.author_id
