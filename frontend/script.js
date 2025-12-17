@@ -22,6 +22,7 @@ let state = {
 };
 
 let messagesFetchController = null;
+let wsConn = null;
 
 function init() {
     if (!state.me || state.me === "3e62ced9-275f-4e96-82f1-d505730df6af") {
@@ -67,9 +68,9 @@ function renderConversations() {
 async function openConversation(id) {
     const reqId = ++state._messagesReqId;
 
-    if (messagesFetchController) {{
+    if (messagesFetchController) {
         try { messagesFetchController.abort(); } catch (_) {}
-    }}
+    }
     messagesFetchController = new AbortController();
     const signal = messagesFetchController.signal;
 
@@ -81,7 +82,7 @@ async function openConversation(id) {
     messagesEl.innerHTML = `<div class="loading">Loading messages...</div>`;
 
     try {
-        const res = await fetch(api.messages(id));
+        const res = await fetch(api.messages(id), { signal });
         if (!res.ok) throw new Error("Failed to load messages");
         const data = await res.json();
 
@@ -93,6 +94,9 @@ async function openConversation(id) {
         const conv = state.convs.find((x) => x.id === id);
         chatNameEl.textContent = conv?.title || "Conversation";
         renderMessages(id, { scrollToBottom: true});
+
+        // connecting the websocket for this active conversation
+        wsConnect(id);
     } catch (err) {
         if (err.name === "AbortError") {
             return;
@@ -146,6 +150,20 @@ async function onSend(e) {
     const text = inputMsg.value.trim();
     if (!text || !state.active) return;
 
+    const tempId = "local-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+    const tempMsg = {
+        id: tempId,
+        conversation_id: state.active,
+        author_id: state.me,
+        body: text,
+        created_at: new Date().toISOString(),
+        _local: true,
+    };
+
+    state.messages[state.active] = state.messages[state.active] || [];
+    state.messages[state.active].push(tempMsg);
+    renderMessages(state.active, { scrollToBottom: true });
+
     inputMsg.value = "";
 
     try {
@@ -160,18 +178,72 @@ async function onSend(e) {
         });
 
         if (!res.ok) {
+            state.messages[state.active] = (state.messages[state.active] || []).filter(m => m.id !== tempId);
+            renderMessages(state.active); 
             const body = await res.text().catch(() => "");
             console.error("send message failed", res.status, body);
             alert("Failed to send message");
+            return;
         }
 
-        const saved = await res.json();
-        state.messages[state.active] = state.messages[state.active] || [];
-        state.messages[state.active].push(saved);
-        renderMessages(state.active, { scrollToBottom: true});
     } catch (err) {
+        state.messages[state.active] = (state.messages[state.active] || []).filter(m => m.id !== tempId);
+        renderMessages(state.active);
         console.error("send message error", err);
         alert("Failed to send message (network)");
+    }
+}
+
+function wsConnect(convId) {
+    closeWs();
+
+    const proto = location.protocol ==="https:" ? "wss" : "ws";
+    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}`;
+    wsConn = new WebSocket(url);
+
+    wsConn.addEventListener("open", () => {    
+    });
+
+    wsConn.addEventListener("message", (ev) => {
+        try {
+            const msg = JSON.parse(ev.data);
+            state.messages[msg.conversation_id] = state.messages[msg.conversation_id] || [];
+
+            const msgs = state.messages[msg.conversation_id];
+            const tempIndex = msgs.findIndex(m => {
+                return m.id && String(m.id).startsWith("local-") &&
+                    m.author_id === msg.author_id &&
+                    m.body === msg.body;
+            });
+            if (tempIndex !== -1) {
+                msgs.splice(tempIndex, 1);
+            }
+
+            // deduping by id
+            const exists = msgs.some((m) => m.id === msg.id);
+            if (!exists) {
+                msgs.push(msg);
+                if (state.active === msg.conversation_id) {
+                    renderMessages(state.active, { scrollToBottom: true });
+                }
+            }
+        } catch (err) {
+            console.error("ws message parse", err);
+        }
+    });
+
+    wsConn.addEventListener("close", () => {
+        wsConn = null;
+    });
+
+    wsConn.addEventListener("error", (e) => {
+    })
+}
+
+function closeWs() {
+    if (wsConn) {
+        try { wsConn.close(); } catch (_) {}
+        wsConn = null;
     }
 }
 

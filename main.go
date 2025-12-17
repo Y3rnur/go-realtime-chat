@@ -11,6 +11,7 @@ import (
 
 	"github.com/Y3rnur/go-realtime-chat/backend"
 	"github.com/Y3rnur/go-realtime-chat/backend/store"
+	"github.com/Y3rnur/go-realtime-chat/backend/ws"
 )
 
 func main() {
@@ -23,8 +24,13 @@ func main() {
 	}
 	defer pool.Close()
 
+	hub := ws.NewHub()
+
 	mux := http.NewServeMux()
 	mux.Handle("/", fs)
+
+	// websocket endpoint
+	mux.HandleFunc("/ws", hub.ServeWS)
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -104,6 +110,10 @@ func main() {
 				http.Error(w, "database error", http.StatusInternalServerError)
 				return
 			}
+
+			// broadcasting the message to connected WS clients for this conversation
+			go hub.Broadcast(saved.ConversationID.String(), saved)
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(saved)
