@@ -39,7 +39,7 @@ func main() {
 	}
 	redisClient := redis.NewClient(redisOpt)
 
-	hub := ws.NewHub(redisClient)
+	hub := ws.NewHub(redisClient, pool)
 	defer hub.Close()
 
 	mux := http.NewServeMux()

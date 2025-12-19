@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -18,15 +19,18 @@ type Hub struct {
 	redis  *redis.Client
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	pool *pgxpool.Pool
 }
 
-func NewHub(redisClient *redis.Client) *Hub {
+func NewHub(redisClient *redis.Client, dbPool *pgxpool.Pool) *Hub {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &Hub{
 		clients: make(map[string]map[*Client]struct{}),
 		redis:   redisClient,
 		ctx:     ctx,
 		cancel:  cancel,
+		pool:    dbPool,
 	}
 	if redisClient != nil {
 		go h.runPubSub()

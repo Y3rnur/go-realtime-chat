@@ -89,6 +89,17 @@ func GetMessagesForConversation(ctx context.Context, pool *pgxpool.Pool, convID 
 	return out, rows.Err()
 }
 
+// IsUserInConversation returns true when the given user is a participant of the conversation.
+func IsUserInConversation(ctx context.Context, pool *pgxpool.Pool, convID, userID uuid.UUID) (bool, error) {
+	var exists bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM conversation_participants
+			WHERE conversation_id = $1 AND user_id = $2
+		)`, convID, userID).Scan(&exists)
+	return exists, err
+}
+
 // SaveMessage inserts a new message and returns the saved row
 func SaveMessage(ctx context.Context, pool *pgxpool.Pool, convID, authorID uuid.UUID, body string) (Message, error) {
 	var m Message

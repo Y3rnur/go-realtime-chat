@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+
+	"github.com/Y3rnur/go-realtime-chat/backend/store"
 )
 
 var upgrader = websocket.Upgrader{
@@ -32,7 +34,8 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ws: upgrade rejected - missing user_id from %s", r.RemoteAddr)
 		return
 	}
-	if _, err := uuid.Parse(userQ); err != nil {
+	uid, err := uuid.Parse(userQ)
+	if err != nil {
 		http.Error(w, "invalid user_id", http.StatusBadRequest)
 		log.Printf("ws: upgrade rejected - invalid user_id %q from %s", userQ, r.RemoteAddr)
 		return
@@ -55,10 +58,27 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ws: upgrade rejected - missing conversation_id from %s", r.RemoteAddr)
 		return
 	}
-	if _, err := uuid.Parse(convID); err != nil {
+	cid, err := uuid.Parse(convID)
+	if err != nil {
 		http.Error(w, "invalid conversation_id", http.StatusBadRequest)
 		log.Printf("ws: upgrade rejected - invalid conversation_id %q from %s", convID, r.RemoteAddr)
 		return
+	}
+
+	if h.pool != nil {
+		ok, err := store.IsUserInConversation(r.Context(), h.pool, cid, uid)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			log.Printf("ws: membership check error for user=%s conv=%s: %v", userQ, convID, err)
+			return
+		}
+		if !ok {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			log.Printf("ws: upgrade forbidden - user %s not participant of conv %s", userQ, convID)
+			return
+		}
+	} else {
+		log.Printf("ws: no db pool configured, skipping membership check for user %s conv %s", userQ, convID)
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
