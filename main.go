@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/google/uuid"
 
 	"github.com/Y3rnur/go-realtime-chat/backend"
 	"github.com/Y3rnur/go-realtime-chat/backend/store"
 	"github.com/Y3rnur/go-realtime-chat/backend/ws"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -24,7 +26,21 @@ func main() {
 	}
 	defer pool.Close()
 
-	hub := ws.NewHub()
+	// creating redis client
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	redisOpt := &redis.Options{
+		Addr: redisAddr,
+	}
+	if p := os.Getenv("REDIS_PASSWORD"); p != "" {
+		redisOpt.Password = p
+	}
+	redisClient := redis.NewClient(redisOpt)
+
+	hub := ws.NewHub(redisClient)
+	defer hub.Close()
 
 	mux := http.NewServeMux()
 	mux.Handle("/", fs)
@@ -111,8 +127,10 @@ func main() {
 				return
 			}
 
-			// broadcasting the message to connected WS clients for this conversation
-			go hub.Broadcast(saved.ConversationID.String(), saved)
+			// publishing to redis
+			if err := hub.PublishMessage(convID.String(), saved); err != nil {
+				log.Printf("redis publish error: %v", err)
+			}
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)

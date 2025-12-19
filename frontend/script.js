@@ -1,5 +1,7 @@
 const DEMO_USER_ID = "3e62ced9-275f-4e96-82f1-d505730df6af";
 
+const WS_TOKEN = "";
+
 const api = {
     conversations: (userId) => `/api/conversations?user_id=${encodeURIComponent(userId)}`,
     messages: (conversationId) => `/api/messages?conversation_id=${encodeURIComponent(conversationId)}`,
@@ -198,15 +200,19 @@ function wsConnect(convId) {
     closeWs();
 
     const proto = location.protocol ==="https:" ? "wss" : "ws";
-    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}`;
+    const tokenPart = WS_TOKEN ? `&token=${encodeURIComponent(WS_TOKEN)}` : "";
+    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}&user_id=${encodeURIComponent(state.me)}${tokenPart}`;
+    console.debug("[WS] connecting to", url);
     wsConn = new WebSocket(url);
 
     wsConn.addEventListener("open", () => {    
+        console.debug("[WS] open", convId);
     });
 
     wsConn.addEventListener("message", (ev) => {
         try {
             const msg = JSON.parse(ev.data);
+            console.debug("[WS] message received for conv", msg.conversation_id, "id", msg.id);
             state.messages[msg.conversation_id] = state.messages[msg.conversation_id] || [];
 
             const msgs = state.messages[msg.conversation_id];
@@ -228,15 +234,17 @@ function wsConnect(convId) {
                 }
             }
         } catch (err) {
-            console.error("ws message parse", err);
+            console.error("[WS] message parse error", err);
         }
     });
 
-    wsConn.addEventListener("close", () => {
+    wsConn.addEventListener("close", (ev) => {
+        console.debug("[WS] close", ev && ev.code, ev && ev.reason);
         wsConn = null;
     });
 
     wsConn.addEventListener("error", (e) => {
+        console.debug("[WS] error", e); 
     })
 }
 
