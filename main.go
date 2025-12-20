@@ -43,7 +43,6 @@ func main() {
 	defer hub.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle("/", fs)
 
 	// websocket endpoint
 	mux.HandleFunc("/ws", hub.ServeWS)
@@ -51,6 +50,45 @@ func main() {
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "API Status: OK")
+	})
+
+	// GET /api/ws_check?conversation_id=<uuid>&user_id=<uuid>
+	mux.HandleFunc("/api/ws_check", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("ws_check: incoming %s %s", r.Method, r.URL.String())
+
+		convQ := r.URL.Query().Get("conversation_id")
+		userQ := r.URL.Query().Get("user_id")
+		if convQ == "" || userQ == "" {
+			log.Printf("ws_check: missing params conv=%q user=%q", convQ, userQ)
+			http.Error(w, "conversation_id and user_id required", http.StatusBadRequest)
+			return
+		}
+		cid, err := uuid.Parse(convQ)
+		if err != nil {
+			log.Printf("ws_check: invalid conv id %q", convQ)
+			http.Error(w, "invalid conversation_id", http.StatusBadRequest)
+			return
+		}
+		uid, err := uuid.Parse(userQ)
+		if err != nil {
+			log.Printf("ws_check: invalid user id %q", userQ)
+			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			return
+		}
+
+		ok, err := store.IsUserInConversation(r.Context(), pool, cid, uid)
+		if err != nil {
+			log.Printf("ws_check: membership check error conv=%s user=%s: %v", cid, uid, err)
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			log.Printf("ws_check: forbidden conv=%s user=%s", cid, uid)
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		log.Printf("ws_check: allowed conv=%s user=%s", cid, uid)
+		w.WriteHeader(http.StatusOK)
 	})
 
 	// GET /api/conversations?user_id=<uuid>
@@ -142,6 +180,8 @@ func main() {
 		}
 
 	})
+
+	mux.Handle("/", fs)
 
 	handler := backend.LoggingMiddleware(mux)
 

@@ -10,6 +10,7 @@ const api = {
 const conversationsEl = document.getElementById("conversations");
 const messagesEl = document.getElementById("messages");
 const chatNameEl = document.getElementById("chat-name");
+const chatSubEl = document.getElementById("chat-sub");
 const composer = document.getElementById("composer");
 const inputMsg = document.getElementById("input-msg");
 const sidebar = document.getElementById("sidebar");
@@ -25,6 +26,19 @@ let state = {
 
 let messagesFetchController = null;
 let wsConn = null;
+
+// For reconnection purposes
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 30000;
+const RECONNECT_MAX_ATTEMPTS = 0;
+
+// For debounce purposes
+let wsConnectDebounceTimer = null;
+const WS_CONNECT_DEBOUNCE_MS = 150;
+
+let manualClose = false;    // will be true if caller intentionally closes ws
 
 function init() {
     if (!state.me || state.me === "3e62ced9-275f-4e96-82f1-d505730df6af") {
@@ -98,7 +112,11 @@ async function openConversation(id) {
         renderMessages(id, { scrollToBottom: true});
 
         // connecting the websocket for this active conversation
-        wsConnect(id);
+        if (wsConnectDebounceTimer) clearTimeout(wsConnectDebounceTimer);
+        wsConnectDebounceTimer = setTimeout(() => {
+            wsConnectDebounceTimer = null;
+            wsConnect(id);
+        }, WS_CONNECT_DEBOUNCE_MS);
     } catch (err) {
         if (err.name === "AbortError") {
             return;
@@ -196,20 +214,103 @@ async function onSend(e) {
     }
 }
 
-function wsConnect(convId) {
-    closeWs();
+// Updating connection status in the UI
+function updateConnectionStatus(text, cls) {
+    if (!chatSubEl) return;
+    chatSubEl.textContent = text || "";
+    chatSubEl.className = cls ? `sub ${cls}` : "sub";
+}
+
+// Clearing any pending reconnect timer
+function clearReconnectTimer() {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+}
+
+// Scheduling a reconnect
+function scheduleReconnect() {
+    if (manualClose) return;
+
+    if (RECONNECT_MAX_ATTEMPTS && reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+        updateConnectionStatus("Disconnected", "disconnected");
+        return;
+    }
+
+    const base = RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts);
+    const jitter = Math.floor(Math.random() * 300);
+    let delay = Math.min(base + jitter, RECONNECT_MAX_MS);
+    reconnectAttempts++;
+
+    updateConnectionStatus(`Reconnecting in ${Math.round(delay/1000)}s...`, "reconnecting");
+
+    clearReconnectTimer();
+
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (state.active) {
+            wsConnect(state.active);
+        } else {
+            updateConnectionStatus("Disconnected", "disconnected");
+        }
+    }, delay);
+}
+
+async function wsConnect(convId) {
+    manualClose = false;
+    closeWs(false);
+
+    clearReconnectTimer();
+
+    updateConnectionStatus("Checking membership...", "checking");
+
+    try {
+        const checkUrl = `/api/ws_check?conversation_id=${encodeURIComponent(convId)}&user_id=${encodeURIComponent(state.me)}`;
+        const res = await fetch(checkUrl, { method: "GET" });
+        if (res.status == 403) {
+            updateConnectionStatus("Forbidden (no access)", "forbidden");
+            return;
+        }
+        if (!res.ok) {
+            updateConnectionStatus("Disconnected", "disconnected");
+            scheduleReconnect();
+            return;
+        }
+    } catch (err) {
+        console.error("[WS] membership preflight error", err);
+        updateConnectionStatus("Disconnected", "disconnected");
+        scheduleReconnect();
+        return;
+    }
 
     const proto = location.protocol ==="https:" ? "wss" : "ws";
     const tokenPart = WS_TOKEN ? `&token=${encodeURIComponent(WS_TOKEN)}` : "";
     const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}&user_id=${encodeURIComponent(state.me)}${tokenPart}`;
     console.debug("[WS] connecting to", url);
-    wsConn = new WebSocket(url);
+    updateConnectionStatus("Connecting...", "connecting");
 
-    wsConn.addEventListener("open", () => {    
+    try {
+        wsConn = new WebSocket(url);
+    } catch (err) {
+        console.error("[WS] new WebSocket constructor failed", err);
+        wsConn = null;
+        scheduleReconnect();
+        return;
+    }
+    
+    const conn = wsConn;
+
+    conn.addEventListener("open", () => { 
+        if (wsConn !== conn) return;   
         console.debug("[WS] open", convId);
+        reconnectAttempts = 0;
+        clearReconnectTimer();
+        updateConnectionStatus("Connected", "connected");
     });
 
-    wsConn.addEventListener("message", (ev) => {
+    conn.addEventListener("message", (ev) => {
+        if (wsConn !== conn) return;
         try {
             const msg = JSON.parse(ev.data);
             console.debug("[WS] message received for conv", msg.conversation_id, "id", msg.id);
@@ -238,20 +339,34 @@ function wsConnect(convId) {
         }
     });
 
-    wsConn.addEventListener("close", (ev) => {
+    conn.addEventListener("close", (ev) => {
+        if (wsConn === conn) {
+            wsConn = null;
+        }
         console.debug("[WS] close", ev && ev.code, ev && ev.reason);
-        wsConn = null;
+        if (manualClose) {
+            updateConnectionStatus("Disconnected", "disconnected");
+            clearReconnectTimer();
+            return;
+        }
+        scheduleReconnect();
     });
 
-    wsConn.addEventListener("error", (e) => {
-        console.debug("[WS] error", e); 
-    })
+    conn.addEventListener("error", (e) => {
+        if (wsConn !== conn) return;
+        console.debug("[WS] error", e);
+    });
 }
 
-function closeWs() {
+function closeWs(isManual = true) {
     if (wsConn) {
         try { wsConn.close(); } catch (_) {}
         wsConn = null;
+    }
+    if (isManual) {
+        manualClose = true;
+        clearReconnectTimer();
+        updateConnectionStatus("Disconnected", "disconnected");
     }
 }
 
