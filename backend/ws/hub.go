@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -76,8 +78,32 @@ func (h *Hub) PublishMessage(convID string, v interface{}) error {
 		return err
 	}
 	chanName := "messages:conversation:" + convID
-	log.Printf("hub: publishing conv=%s to redis channel=%s payload_type=%T", convID, chanName, v)
-	return h.redis.Publish(h.ctx, chanName, b).Err()
+
+	// Retrying the publish with exponential backoff + jitter.
+	const maxAttempts = 5
+	backoff := 100 * time.Millisecond
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err = h.redis.Publish(h.ctx, chanName, b).Err()
+		if err == nil {
+			log.Printf("hub: published conv=%s attempt=%d", convID, attempt)
+			return nil
+		}
+
+		log.Printf("hub: redis publish error conv=%s attempt=%d err=%v", convID, attempt, err)
+
+		if attempt == maxAttempts {
+			log.Printf("hub: publish failed after %d attempts; falling back to local broadcast conv=%s", maxAttempts, convID)
+			h.broadcastLocal(convID, v)
+			return err
+		}
+
+		jitter := time.Duration(rand.Intn(200)) * time.Millisecond
+		time.Sleep(backoff + jitter)
+		backoff *= 2
+	}
+	// local broadcast (should not reach here, but backoff for safety)
+	h.broadcastLocal(convID, v)
+	return err
 }
 
 // internal local broadcast

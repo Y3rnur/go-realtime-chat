@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -145,23 +146,61 @@ func main() {
 				Body           string `json:"body"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid request body", http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
 				return
 			}
+
+			body := strings.TrimSpace(req.Body)
+			if body == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "body required"})
+				return
+			}
+			if len(body) > 4000 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "body too long"})
+				return
+			}
+
 			convID, err := uuid.Parse(req.ConversationID)
 			if err != nil {
-				http.Error(w, "invalid conversation_id", http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid conversation_id"})
 				return
 			}
 			authorID, err := uuid.Parse(req.AuthorID)
 			if err != nil {
-				http.Error(w, "invalid author_id", http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid author_id"})
 				return
 			}
+			ok, err := store.IsUserInConversation(r.Context(), pool, convID, authorID)
+			if err != nil {
+				log.Printf("ws_check: membership check error conv=%s user=%s: %v", convID, authorID, err)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "server error"})
+				return
+			}
+			if !ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+				return
+			}
+
 			saved, err := store.SaveMessage(r.Context(), pool, convID, authorID, req.Body)
 			if err != nil {
 				log.Printf("save message error: %v", err)
-				http.Error(w, "database error", http.StatusInternalServerError)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "database error"})
 				return
 			}
 
