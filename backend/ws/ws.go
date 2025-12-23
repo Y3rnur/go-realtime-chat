@@ -17,8 +17,10 @@ var upgrader = websocket.Upgrader{
 }
 
 type Client struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	conn   *websocket.Conn
+	mu     sync.Mutex
+	userID string
+	convID string
 }
 
 func (c *Client) send(b []byte) {
@@ -89,7 +91,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("ws: connected user=%s conv=%s remote=%s", userQ, convID, r.RemoteAddr)
-	client := &Client{conn: conn}
+	client := &Client{conn: conn, userID: userQ, convID: convID}
 	h.AddClient(convID, client)
 
 	go func() {
@@ -98,9 +100,12 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close()
 		}()
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
 				return
 			}
+			// forwarding the client-sent messages (typing/read/presence) to hub
+			h.HandleClientMessage(convID, userQ, msg)
 		}
 	}()
 }

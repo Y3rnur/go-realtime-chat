@@ -125,8 +125,8 @@ func (h *Hub) broadcastLocal(convID string, v interface{}) {
 
 // run a pattern subscription and relay to local clients
 func (h *Hub) runPubSub() {
-	pubsub := h.redis.PSubscribe(h.ctx, "messages:conversation:*")
-	log.Printf("hub: started redis psubscribe to messages:conversation:*")
+	pubsub := h.redis.PSubscribe(h.ctx, "messages:conversation:*", "events:conversation:*", "presence:conversation:*")
+	log.Printf("hub: started redis psubscribe to messages:conversation:*, events:conversation:*, presence:conversation:*")
 	ch := pubsub.Channel()
 	for {
 		select {
@@ -138,23 +138,115 @@ func (h *Hub) runPubSub() {
 				return
 			}
 			// extracting convID from channel name
-			parts := strings.SplitN(msg.Channel, "messages:conversation:", 2)
-			if len(parts) != 2 {
+			parts := strings.SplitN(msg.Channel, ":", 3)
+			if len(parts) < 3 {
 				continue
 			}
-			convID := parts[1]
+			chanType := parts[0]
+			convID := parts[2]
 			var payload json.RawMessage = json.RawMessage(msg.Payload)
 			h.mu.RLock()
 			clients := h.clients[convID]
 			h.mu.RUnlock()
 			if len(clients) == 0 {
-				log.Printf("hub: received message for conv %s but no local clients", convID)
+				log.Printf("hub: received %s for conv %s but no local clients", chanType, convID)
 				continue
 			}
-			log.Printf("hub: relaying message for conv %s to %d client(s)", convID, len(clients))
+			log.Printf("hub: relaying %s for conv %s to %d client(s)", chanType, convID, len(clients))
 			for c := range clients {
 				c.send(payload)
 			}
 		}
+	}
+}
+
+// publishes typing/read events to events channel
+func (h *Hub) PublishEvent(convID string, v interface{}) error {
+	if h.redis == nil {
+		// broadcast to local clients
+		h.broadcastLocal(convID, v)
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	chanName := "events:conversation:" + convID
+	return h.redis.Publish(h.ctx, chanName, b).Err()
+}
+
+// sets a Redis TTL key and publishes presence delta
+func (h *Hub) UpdatePresence(convID, userID, status string) error {
+	if h.redis == nil {
+		// broadcast presence locally
+		payload := map[string]string{
+			"type":            "presence",
+			"conversation_id": convID,
+			"user_id":         userID,
+			"status":          status,
+		}
+		h.broadcastLocal(convID, payload)
+		return nil
+	}
+	key := "presence:" + convID + ":" + userID
+	// setting with TTL
+	if err := h.redis.Set(h.ctx, key, status, 60*time.Second).Err(); err != nil {
+		return err
+	}
+	// publishing presence delta
+	payload := map[string]string{
+		"type":            "presence",
+		"conversation_id": convID,
+		"user_id":         userID,
+		"status":          status,
+	}
+	b, _ := json.Marshal(payload)
+	chanName := "presence:conversation:" + convID
+	return h.redis.Publish(h.ctx, chanName, b).Err()
+}
+
+// parses incoming WS client messages (typing/read/presence)
+func (h *Hub) HandleClientMessage(convID string, userID string, raw []byte) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		log.Printf("hub: invalid client message: %v", err)
+		return
+	}
+	typ, _ := m["type"].(string)
+	switch typ {
+	case "typing":
+		payload := map[string]any{
+			"type":            "typing",
+			"conversation_id": convID,
+			"user_id":         userID,
+			"timestamp":       time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := h.PublishEvent(convID, payload); err != nil {
+			log.Printf("hub: publish typing error: %v", err)
+		}
+	case "read":
+		payload := map[string]any{
+			"type":            "read",
+			"conversation_id": convID,
+			"user_id":         userID,
+			"timestamp":       time.Now().UTC().Format(time.RFC3339),
+		}
+		if lr, ok := m["last_read_id"]; ok {
+			payload["last_read_id"] = lr
+		}
+		if err := h.PublishEvent(convID, payload); err != nil {
+			log.Printf("hub: publish read error: %v", err)
+		}
+	case "presence":
+		status, _ := m["status"].(string)
+		if status == "" {
+			status = "online"
+		}
+		if err := h.UpdatePresence(convID, userID, status); err != nil {
+			log.Printf("hub: update presence error: %v", err)
+		}
+	default:
+		// unknown type (just logging it)
+		log.Printf("hub: unknown client message type: %q", typ)
 	}
 }

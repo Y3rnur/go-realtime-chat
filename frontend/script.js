@@ -22,6 +22,7 @@ let state = {
     active: null,
     messages: {},
     _messagesReqId: 0,
+    users: {},
 };
 
 let messagesFetchController = null;
@@ -40,6 +41,26 @@ const WS_CONNECT_DEBOUNCE_MS = 150;
 
 let manualClose = false;    // will be true if caller intentionally closes ws
 
+// For typing debounce states
+let typingSentAt = 0;
+const TYPING_THROTTLE_MS = 2000;
+const TYPING_INDICATOR_MS = 3000;
+const typingTimers = {};
+let statusFallback = "";
+function showStatus(text, cls) {
+    if (!chatSubEl) return;
+    chatSubEl.textContent = text || "";
+    chatSubEl.className = cls ? `sub ${cls}` : "sub";
+}
+
+function getDisplayName(userId) {
+    if (!userId) return "";
+    if (String(userId) === String(state.me)) return "You";
+    if (state.users && state.users[userId]) return state.users[userId];
+    if (typeof userId === "string" && userId.includes("-")) return userId.split("-")[0];
+    return String(userId).slice(0, 8);
+}
+
 function init() {
     if (!state.me || state.me === "3e62ced9-275f-4e96-82f1-d505730df6af") {
         console.warn("Set DEMO_USER_ID in frontend/script.js to a real user UUID.");
@@ -48,6 +69,30 @@ function init() {
     composer.addEventListener("submit", onSend);
     document.getElementById("new-conv").addEventListener("click", () => sidebar.classList.toggle("open"));
     backBtn.addEventListener("click", () => sidebar.classList.add("open"));
+}
+
+// Dev user-switch helper (temporary development tool. Will delete it after introducing auth/JWT)
+const devSelect = document.getElementById("dev-user-select");
+const devApply = document.getElementById("dev-user-apply");
+if (devApply) {
+    devApply.addEventListener("click", () => {
+        const v = devSelect.value;
+        if (!v) return alert("Choose a dev user id");
+        state.me = v;
+        const selectedText = devSelect.options[devSelect.selectedIndex].text;
+        if (selectedText && selectedText !== "(default)") {
+            state.users[v] = selectedText;
+        }
+        localStorage.setItem("dev_user_id", v);
+        loadConversations();
+        alert("Set user to " + v + " — open another window and pick a different user to test.");
+    });
+    // restore saved
+    const saved = localStorage.getItem("dev_user_id");
+    if (saved) {
+        state.me = saved;
+        try { devSelect.value = saved; } catch (_) {}
+    }
 }
 
 async function loadConversations() {
@@ -111,7 +156,18 @@ async function openConversation(id) {
         chatNameEl.textContent = conv?.title || "Conversation";
         renderMessages(id, { scrollToBottom: true});
 
-        // connecting the websocket for this active conversation
+        try {
+            if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+                const lastMsg = state.messages[id][state.messages[id].length - 1];
+                const payload = { type: "read", conversation_id: id};
+                if (lastMsg && lastMsg.id) payload.last_read_id = lastMsg.id;
+                wsConn.send(JSON.stringify(payload));
+            }
+        } catch (err) {
+            console.debug("[WS] send read failed", err);
+        }
+
+        // connecting the websocket for this active conversation (debounced)
         if (wsConnectDebounceTimer) clearTimeout(wsConnectDebounceTimer);
         wsConnectDebounceTimer = setTimeout(() => {
             wsConnectDebounceTimer = null;
@@ -139,6 +195,9 @@ function renderMessages(convId, opts = {}) {
     let lastDate = null;
 
     for (const m of list) {
+        if (m.author_id && m.author_name) {
+            state.users[m.author_id] = m.author_name;
+        }
         const d = new Date(m.created_at);
         const dateKey = d.toISOString().slice(0, 10);
         if (dateKey !== lastDate) {
@@ -168,6 +227,7 @@ function renderMessages(convId, opts = {}) {
 async function onSend(e) {
     e.preventDefault();
     const text = inputMsg.value.trim();
+    sendTypingStop();
     if (!text || !state.active) return;
 
     const tempId = "local-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
@@ -313,7 +373,65 @@ async function wsConnect(convId) {
         if (wsConn !== conn) return;
         try {
             const msg = JSON.parse(ev.data);
+            if (msg && msg.type) {
+                switch (msg.type) {
+                    case "typing": {
+                        // showing typing indicator in chatSubEl temporarily
+                        if (msg.user_id === state.me) break;
+
+                        const who = getDisplayName(msg.user_id);
+                        if (msg.stopped) {
+                            if (typingTimers[msg.user_id]) {
+                                clearTimeout(typingTimers[msg.user_id]);
+                                delete typingTimers[msg.user_id];
+                            }
+                            if (Object.keys(typingTimers).length === 0) {
+                                showStatus(statusFallback || "", "");
+                            }
+                            break;
+                        }
+
+                        if (typingTimers[msg.user_id]) {
+                            clearTimeout(typingTimers[msg.user_id]);
+                        }
+                        statusFallback = statusFallback || chatSubEl.textContent || "";
+                        showStatus(`${who} is typing...`, "typing");
+                        typingTimers[msg.user_id] = setTimeout(() => {
+                            delete typingTimers[msg.user_id];
+                            if (Object.keys(typingTimers).length === 0) {
+                                showStatus(statusFallback || "", "");
+                                statusFallback = "";
+                            }
+                        }, TYPING_INDICATOR_MS);
+                        break;
+                    }
+                    case "presence": {
+                        // updating connection status to show presence if for active conversation
+                        if (msg.conversation_id === state.active && msg.user_id !== state.me) {
+                            showStatus(`${getDisplayName(msg.user_id)} ${msg.status}`, "presence");
+                        }
+                        break;
+                    }
+                    case "read": {
+                        // for now, no visual mark messages (will add later)
+                        if (msg.conversation_id === state.active) {
+                            showStatus(`Last read by ${getDisplayName(msg.user_id)}`, "read");
+                            setTimeout(() => {
+                                // clearing after a moment
+                                if (chatSubEl.textContent.startsWith("Last read by")) {
+                                    showStatus("", "");
+                                }
+                            }, 3000);
+                        }
+                        break;
+                    }
+                    default:
+                        console.debug("[WS] event type not handled", msg.type);
+                }
+                return;
+            }
             console.debug("[WS] message received for conv", msg.conversation_id, "id", msg.id);
+            const chatMsg = msg;
             state.messages[msg.conversation_id] = state.messages[msg.conversation_id] || [];
 
             const msgs = state.messages[msg.conversation_id];
@@ -325,7 +443,10 @@ async function wsConnect(convId) {
             if (tempIndex !== -1) {
                 msgs.splice(tempIndex, 1);
             }
-
+            
+            if (msg.author_id && msg.author_name) {
+                state.users[msg.author_id] = msg.author_name;
+            }
             // deduping by id
             const exists = msgs.some((m) => m.id === msg.id);
             if (!exists) {
@@ -357,6 +478,43 @@ async function wsConnect(convId) {
         console.debug("[WS] error", e);
     });
 }
+
+function sendTyping() {
+    if (!wsConn || wsConn.readyState !== WebSocket.OPEN || !state.active) return;
+    const now = Date.now();
+    if (now - typingSentAt < TYPING_THROTTLE_MS) return;
+    typingSentAt = now;
+    try {
+        wsConn.send(JSON.stringify({
+            type:               "typing",
+            conversation_id:    state.active,
+            user_id:            state.me
+        }));
+    } catch (err) {
+        console.debug("[WS] send typing failed", err);
+    }
+}
+
+function sendTypingStop() {
+    if (!wsConn || wsConn.readyState !== WebSocket.OPEN || !state.active) return;
+    try {
+        wsConn.send(JSON.stringify({
+            type:               "typing",
+            conversation_id:    state.active,
+            user_id:            state.me,
+            stopped:            true
+        }));
+    } catch (err) {
+        console.debug("[WS] send typing stop failed", err);
+    }
+}
+
+inputMsg.addEventListener("input", () => {
+    sendTyping();
+});
+inputMsg.addEventListener("blur", () => {
+    sendTypingStop();
+});
 
 function closeWs(isManual = true) {
     if (wsConn) {
