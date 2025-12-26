@@ -178,3 +178,23 @@ func LoginHandler(pool *pgxpool.Pool) http.Handler {
 		})
 	})
 }
+
+// LogoutHandler clears the httpOnly access_token cookie.
+func LogoutHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie := &http.Cookie{
+			Name:     "access_token",
+			Value:    "",
+			Path:     "/",
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		}
+		if r.TLS != nil {
+			cookie.Secure = true
+		}
+		http.SetCookie(w, cookie)
+		w.WriteHeader(http.StatusOK)
+	})
+}

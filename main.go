@@ -48,20 +48,25 @@ func main() {
 	// websocket endpoint
 	mux.HandleFunc("/ws", hub.ServeWS)
 
+	// auth: login (returns token + sets httpOnly cookie)
+	mux.Handle("/api/login", backend.LoginHandler(pool))
+	// auth: logout (clears cookie)
+	mux.Handle("/api/logout", backend.RequireAuth(backend.LogoutHandler()))
+
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "API Status: OK")
 	})
 
-	// GET /api/ws_check?conversation_id=<uuid>&user_id=<uuid>
-	mux.HandleFunc("/api/ws_check", func(w http.ResponseWriter, r *http.Request) {
+	// GET /api/ws_check?conversation_id=<uuid>
+	// requires auth (JWT in Authorization header or cookie)
+	mux.Handle("/api/ws_check", backend.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ws_check: incoming %s %s", r.Method, r.URL.String())
 
 		convQ := r.URL.Query().Get("conversation_id")
-		userQ := r.URL.Query().Get("user_id")
-		if convQ == "" || userQ == "" {
-			log.Printf("ws_check: missing params conv=%q user=%q", convQ, userQ)
-			http.Error(w, "conversation_id and user_id required", http.StatusBadRequest)
+		if convQ == "" {
+			log.Printf("ws_check: missing param conv=%q", convQ)
+			http.Error(w, "conversation_id required", http.StatusBadRequest)
 			return
 		}
 		cid, err := uuid.Parse(convQ)
@@ -70,10 +75,10 @@ func main() {
 			http.Error(w, "invalid conversation_id", http.StatusBadRequest)
 			return
 		}
-		uid, err := uuid.Parse(userQ)
+		uidStr := backend.GetUserIDFromCtx(r.Context())
+		uid, err := uuid.Parse(uidStr)
 		if err != nil {
-			log.Printf("ws_check: invalid user id %q", userQ)
-			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			http.Error(w, "invalid user", http.StatusUnauthorized)
 			return
 		}
 
@@ -90,18 +95,14 @@ func main() {
 		}
 		log.Printf("ws_check: allowed conv=%s user=%s", cid, uid)
 		w.WriteHeader(http.StatusOK)
-	})
+	})))
 
 	// GET /api/conversations?user_id=<uuid>
-	mux.HandleFunc("/api/conversations", func(w http.ResponseWriter, r *http.Request) {
-		userQ := r.URL.Query().Get("user_id")
-		if userQ == "" {
-			http.Error(w, "user_id required", http.StatusBadRequest)
-			return
-		}
-		uid, err := uuid.Parse(userQ)
+	mux.Handle("/api/conversations", backend.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uidStr := backend.GetUserIDFromCtx(r.Context())
+		uid, err := uuid.Parse(uidStr)
 		if err != nil {
-			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			http.Error(w, "invalid user", http.StatusUnauthorized)
 			return
 		}
 		convs, err := store.GetConversationsForUser(r.Context(), pool, uid, 50)
@@ -111,11 +112,11 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(convs)
-	})
+	})))
 
 	// GET /api/messages?conversation_id=<uuid>&limit=50
 	// POST /api/messages { conversation_id, author_id, body }
-	mux.HandleFunc("/api/messages", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/messages", backend.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			cq := r.URL.Query().Get("conversation_id")
@@ -139,10 +140,9 @@ func main() {
 			return
 
 		case http.MethodPost:
-			// decoding client payload
+			// decoding client payload; author will be taken from JWT
 			var req struct {
 				ConversationID string `json:"conversation_id"`
-				AuthorID       string `json:"author_id"`
 				Body           string `json:"body"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -173,11 +173,13 @@ func main() {
 				json.NewEncoder(w).Encode(map[string]string{"error": "invalid conversation_id"})
 				return
 			}
-			authorID, err := uuid.Parse(req.AuthorID)
+			// author must match authenticated user
+			uidStr := backend.GetUserIDFromCtx(r.Context())
+			authorID, err := uuid.Parse(uidStr)
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid author_id"})
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid user"})
 				return
 			}
 			ok, err := store.IsUserInConversation(r.Context(), pool, convID, authorID)
@@ -218,7 +220,7 @@ func main() {
 			return
 		}
 
-	})
+	})))
 
 	mux.Handle("/", fs)
 

@@ -3,7 +3,8 @@ const DEMO_USER_ID = "3e62ced9-275f-4e96-82f1-d505730df6af";
 const WS_TOKEN = "";
 
 const api = {
-    conversations: (userId) => `/api/conversations?user_id=${encodeURIComponent(userId)}`,
+    // conversations is now an auth-protected endpoint; no user_id param required.
+    conversations: () => `/api/conversations`,
     messages: (conversationId) => `/api/messages?conversation_id=${encodeURIComponent(conversationId)}`,
 };
 
@@ -24,6 +25,21 @@ let state = {
     _messagesReqId: 0,
     users: {},
 };
+
+// helper to get token from localStorage (dev fallback).
+function getStoredToken() {
+    return localStorage.getItem("access_token") || "";
+}
+
+function saveStoredToken(tok) {
+    if (!tok) {
+        localStorage.removeItem("access_token");
+    } else {
+        localStorage.setItem("access_token", tok)
+    }
+}
+// Auth UI DOM refs
+let authLoginBtn, authLogoutBtn, authEmail, authPw, authForm, authInfo, authName;
 
 let messagesFetchController = null;
 let wsConn = null;
@@ -65,10 +81,107 @@ function init() {
     if (!state.me || state.me === "3e62ced9-275f-4e96-82f1-d505730df6af") {
         console.warn("Set DEMO_USER_ID in frontend/script.js to a real user UUID.");
     }
+
+    // Auth UI wiring
+    authLoginBtn = document.getElementById("auth-login");
+    authLogoutBtn = document.getElementById("auth-logout");
+    authEmail = document.getElementById("auth-email");
+    authPw = document.getElementById("auth-pw");
+    authForm = document.getElementById("auth-form");
+    authInfo = document.getElementById("auth-info");
+    authName = document.getElementById("auth-name");
+
+    if (authLoginBtn) {
+        authLoginBtn.addEventListener("click", async () => {
+            const email = (authEmail.value || "").trim();
+            const pw = authPw.value || "";
+            if (!email || !pw) return alert("email & password required");
+            await login(email, pw);
+        });
+    }
+    if (authLogoutBtn) {
+        authLogoutBtn.addEventListener("click", () => {
+            logout();
+        });
+    }
+
+    // restoring saved token (dev fallback)
+    const savedToken = getStoredToken();
+    if (savedToken) {
+        // showing auth-info briefly
+        if (authForm && authInfo && authName) {
+            authForm.style.display = "none";
+            authInfo.style.display = "inline-block";
+            authName.textContent = "...";
+        }
+    }
+
     loadConversations();
+
     composer.addEventListener("submit", onSend);
     document.getElementById("new-conv").addEventListener("click", () => sidebar.classList.toggle("open"));
     backBtn.addEventListener("click", () => sidebar.classList.add("open"));
+}
+
+// login helper
+async function login(email, password) {
+    try {
+        const res = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+            credentials: "same-origin"
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(()=>"");
+            alert("Login failed: " + (body || res.status));
+            return;
+        }
+        const data = await res.json();
+        if (data && data.token) {
+            saveStoredToken(data.token);    // dev fallback
+        }
+        if (data && data.user && data.user.id) {
+            state.me = data.user.id;
+            if (data.user.display_name) state.users[state.me] = data.user.display_name;
+            authForm.style.display = "none";
+            authInfo.style.display = "inline-block";
+            authName.textContent = data.user.display_name || state.me;
+            // refreshing conversations and current view
+            await loadConversations();
+            if (state.active) openConversation(state.active);
+        }
+    } catch (err) {
+        console.error("login error", err);
+        alert("Login error");
+    }
+}
+
+function logout() {
+    // telling server to clear cookie, then clear client-side token and state
+    (async () => {
+        try {
+            await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+        } catch (err) {
+            console.warn("logout requeset failed", err);
+        }
+        saveStoredToken("");
+        // clearing client-side auth + conversation/message state and UI
+        state.me = DEMO_USER_ID;
+        delete state.users[state.me];
+        state.convs = [];
+        state.active = null;
+        state.messages = {};
+        if (authForm) authForm.style.display = "block";
+        if (authInfo) authInfo.style.display = "none";
+        if (authName) authName.textContent = "";
+        // clear messages UI immediately without needing page reload
+        if (messagesEl) messagesEl.innerHTML = "";
+        if (chatNameEl) chatNameEl.textContent = "Select a conversation";
+        if (chatSubEl) chatSubEl.textContent = "-";
+        renderConversations();
+        closeWs(true);
+    })();
 }
 
 // Dev user-switch helper (temporary development tool. Will delete it after introducing auth/JWT)
@@ -97,10 +210,20 @@ if (devApply) {
 
 async function loadConversations() {
     try {
-        const res = await fetch(api.conversations(state.me));
-        if (!res.ok) throw new Error("Failed to load conversations");
+        const res = await fetch(api.conversations(), {credentials: "same-origin"});
+        if (!res.ok) {
+            console.error("loadConversations failed:", res.status, res.statusText);
+            state.convs = [];
+            renderConversations();
+            return;
+        }
         const data = await res.json();
-        state.convs = data;
+        if (!Array.isArray(data)) {
+            console.error("loadConversations unexpected payload:", data);
+            state.convs = [];
+        } else {
+            state.convs = data;
+        }
         renderConversations();
     } catch (err) {
         console.error(err);
@@ -110,6 +233,10 @@ async function loadConversations() {
 
 function renderConversations() {
     conversationsEl.innerHTML = "";
+    if (!Array.isArray(state.convs) || state.convs.length === 0) {
+        conversationsEl.innerHTML = `<li class="empty">No conversations</li>`;
+        return;
+    }
     for (const c of state.convs) {
         const li = document.createElement("li");
         li.className = c.id === state.active ? "active" : "";
@@ -143,7 +270,7 @@ async function openConversation(id) {
     messagesEl.innerHTML = `<div class="loading">Loading messages...</div>`;
 
     try {
-        const res = await fetch(api.messages(id), { signal });
+        const res = await fetch(api.messages(id), { signal, credentials: "same-origin" });
         if (!res.ok) throw new Error("Failed to load messages");
         const data = await res.json();
 
@@ -250,9 +377,9 @@ async function onSend(e) {
         const res = await fetch("/api/messages", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
             body: JSON.stringify({
                 conversation_id: state.active,
-                author_id: state.me,
                 body: text,
             }),
         });
@@ -326,8 +453,8 @@ async function wsConnect(convId) {
     updateConnectionStatus("Checking membership...", "checking");
 
     try {
-        const checkUrl = `/api/ws_check?conversation_id=${encodeURIComponent(convId)}&user_id=${encodeURIComponent(state.me)}`;
-        const res = await fetch(checkUrl, { method: "GET" });
+        const checkUrl = `/api/ws_check?conversation_id=${encodeURIComponent(convId)}`;
+        const res = await fetch(checkUrl, { method: "GET", credentials: "same-origin" });
         if (res.status == 403) {
             updateConnectionStatus("Forbidden (no access)", "forbidden");
             return;
@@ -345,8 +472,10 @@ async function wsConnect(convId) {
     }
 
     const proto = location.protocol ==="https:" ? "wss" : "ws";
-    const tokenPart = WS_TOKEN ? `&token=${encodeURIComponent(WS_TOKEN)}` : "";
-    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}&user_id=${encodeURIComponent(state.me)}${tokenPart}`;
+    // prefer cookie auth; stored token included as fallback for dev
+    const tokenPart = getStoredToken() ? `&token=${encodeURIComponent(getStoredToken())}` : "";
+    const sep = tokenPart ? "&" : "?";
+    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}${tokenPart ? tokenPart : ""}`;
     console.debug("[WS] connecting to", url);
     updateConnectionStatus("Connecting...", "connecting");
 

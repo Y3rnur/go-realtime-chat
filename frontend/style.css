@@ -134,3 +134,30 @@ html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-s
     font-size: 13px;
     text-align: center;
 }
+
+/* Auth UI (top-right) */
+.auth-ui{
+    position: fixed;
+    right: 12px;
+    top: 12px;
+    background: rgba(7,18,30,0.96);
+    border: 1px solid rgba(255,255,255,0.04);
+    padding: 8px;
+    border-radius: 8px;
+    z-index: 1200;
+    display:flex;
+    gap:8px;
+    align-items:center;
+    color:var(--text);
+}
+.auth-form{display:flex;gap:6px;align-items:center}
+.auth-input{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--text);width:140px}
+.auth-btn{padding:8px 10px;border-radius:8px;background:var(--accent);border:none;color:white;cursor:pointer}
+.auth-info{display:flex;gap:8px;align-items:center}
+.auth-name{font-weight:600;color:var(--text)}
+.auth-logout{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--text)}
+
+@media (max-width:720px){
+    .auth-ui{right:8px;top:8px;padding:6px}
+    .auth-input{width:100px}
+}

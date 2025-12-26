@@ -10,16 +10,17 @@
     <body>
         <div class="chat-app" id="app">
             <aside class="sidebar" id="sidebar" aria-label="Conversations">
-                <!-- switch for two users. Used in development, will delete it after introducing auth/JWT -->
-                <div id="dev-user" style="position:fixed;right:8px;top:8px;background:#fff;padding:6px;border:1px solid #ddd;z-index:1000;">
-                    <label>Dev user:
-                        <select id="dev-user-select">
-                            <option value="">(default)</option>
-                            <option value="3e62ced9-275f-4e96-82f1-d505730df6af">Alice</option>
-                            <option value="180d9372-7722-46d5-9d96-52c2ec1cc5b1">Bob</option>
-                        </select>
-                    </label>
-                    <button id="dev-user-apply">Use</button>
+                <!-- Auth UI -->
+                <div id="auth-ui" class="auth-ui" aria-hidden="false">
+                    <div id="auth-form" class="auth-form">
+                        <input id="auth-email" class="auth-input" type="email" placeholder="Email" />
+                        <input id="auth-pw" class="auth-input" type="password" placeholder="Password" />
+                        <button id="auth-login" class="auth-btn">Login</button>
+                    </div>
+                    <div id="auth-info" class="auth-info" style="display:none;">
+                        <span id="auth-name" class="auth-name"></span>
+                        <button id="auth-logout" class="auth-btn auth-logout">Logout</button>
+                    </div>
                 </div>
                 <header class="sidebar-header">
                     <h1 class="brand">MyChat</h1>
