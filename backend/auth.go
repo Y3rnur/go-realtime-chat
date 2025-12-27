@@ -2,9 +2,13 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -19,21 +23,32 @@ type authCtxKey string
 
 const userIDKey authCtxKey = "userID"
 
-// GenerateJWT creates an HS256 JWT with a 24h expiry.
-func GenerateJWT(userID, email, displayName string) (string, error) {
+// Access token lifetime
+const accessTokenTTL = 15 * time.Minute
+
+// Refresh token lifetime
+const refreshTokenTTL = 7 * 24 * time.Hour
+
+// GenerateJWT creates an HS256 JWT with configurable expiry.
+func GenerateJWTWithExpiry(userID, email, displayName string, ttl time.Duration) (string, error) {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		return "", errors.New("JWT_SECRET not configured")
 	}
+	now := time.Now().UTC()
 	claims := jwt.MapClaims{
 		"sub":          userID,
 		"email":        email,
 		"display_name": displayName,
-		"iat":          time.Now().Unix(),
-		"exp":          time.Now().Add(24 * time.Hour).Unix(),
+		"iat":          now.Unix(),
+		"exp":          now.Add(ttl).Unix(),
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return t.SignedString([]byte(secret))
+}
+
+func GenerateJWT(userID, email, displayName string) (string, error) {
+	return GenerateJWTWithExpiry(userID, email, displayName, 24*time.Hour)
 }
 
 // parseToken validates and returns MapClaims.
@@ -122,6 +137,85 @@ func GetUserIDFromCtx(ctx context.Context) string {
 	return ""
 }
 
+// helpers for refresh token generation / hashing
+func generateRandomToken(nbytes int) (string, error) {
+	b := make([]byte, nbytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func hashToken(tok string) string {
+	h := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(h[:])
+}
+
+// createRefreshToken inserts a refresh token row and returns the raw token to set in cookie.
+func createRefreshToken(pool *pgxpool.Pool, userID string) (string, error) {
+	token, err := generateRandomToken(32)
+	if err != nil {
+		return "", err
+	}
+	hash := hashToken(token)
+	expires := time.Now().Add(refreshTokenTTL)
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)
+	`, userID, hash, expires)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// rotateRefreshToken finds a token row by hash, ensures valid, and rotates it (update token_hash/expires). Returns new raw token.
+func rotateRefreshToken(pool *pgxpool.Pool, oldToken string) (string, string, error) {
+	oldHash := hashToken(oldToken)
+	var id string
+	var userID string
+	var revoked bool
+	var expires time.Time
+	err := pool.QueryRow(context.Background(), `
+		SELECT id::text, user_id::text, revoked, expires_at
+		FROM refresh_tokens
+		WHERE token_hash = $1
+		LIMIT 1
+	`, oldHash).Scan(&id, &userID, &revoked, &expires)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid refresh token")
+	}
+	if revoked || time.Now().After(expires) {
+		return "", "", fmt.Errorf("refresh token revoked or expired")
+	}
+	// rotate: generate new token and update row
+	newTok, err := generateRandomToken(32)
+	if err != nil {
+		return "", "", err
+	}
+	newHash := hashToken(newTok)
+	newExpires := time.Now().Add(refreshTokenTTL)
+	_, err = pool.Exec(context.Background(), `
+		UPDATE refresh_tokens SET token_hash=$1, expires_at=$2, created_at=now(), revoked=false WHERE id=$3
+	`, newHash, newExpires, id)
+	if err != nil {
+		return "", "", err
+	}
+	return newTok, userID, nil
+}
+
+// revokeRefreshToken revokes token row matching provided raw token.
+func revokeRefreshToken(pool *pgxpool.Pool, token string) error {
+	if token == "" {
+		return nil
+	}
+	h := hashToken(token)
+	_, err := pool.Exec(context.Background(), `
+		UPDATE refresh_tokens SET revoked = true WHERE token_hash=$1
+	`, h)
+	return err
+}
+
 // LoginHandler returns an http.Handler that performs email/password login and issues and httpOnly cookie + returns token.
 func LoginHandler(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,25 +241,44 @@ func LoginHandler(pool *pgxpool.Pool) http.Handler {
 			return
 		}
 
-		token, err := GenerateJWT(id, email, display.String)
+		token, err := GenerateJWTWithExpiry(id, email, display.String, accessTokenTTL)
 		if err != nil {
 			http.Error(w, "server error", http.StatusInternalServerError)
 			return
 		}
 
 		// setting httpOnly cookie (secure when TLS)
-		cookie := &http.Cookie{
+		accessCookie := &http.Cookie{
 			Name:     "access_token",
 			Value:    token,
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 			Path:     "/",
-			Expires:  time.Now().Add(24 * time.Hour),
+			Expires:  time.Now().Add(accessTokenTTL),
 		}
 		if r.TLS != nil {
-			cookie.Secure = true
+			accessCookie.Secure = true
 		}
-		http.SetCookie(w, cookie)
+		http.SetCookie(w, accessCookie)
+
+		// creating refresh token row & cookie
+		refreshRaw, err := createRefreshToken(pool, id)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		refreshCookie := &http.Cookie{
+			Name:     "refresh_token",
+			Value:    refreshRaw,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/api",
+			Expires:  time.Now().Add(refreshTokenTTL),
+		}
+		if r.TLS != nil {
+			refreshCookie.Secure = true
+		}
+		http.SetCookie(w, refreshCookie)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -179,10 +292,81 @@ func LoginHandler(pool *pgxpool.Pool) http.Handler {
 	})
 }
 
-// LogoutHandler clears the httpOnly access_token cookie.
-func LogoutHandler() http.Handler {
+// RefreshHandler rotates refresh token and issues a new access token.
+func RefreshHandler(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie := &http.Cookie{
+		// reading the cookie
+		c, err := r.Cookie("refresh_token")
+		if err != nil || c.Value == "" {
+			http.Error(w, "missing refresh token", http.StatusUnauthorized)
+			return
+		}
+		newRaw, userID, err := rotateRefreshToken(pool, c.Value)
+		if err != nil {
+			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+			return
+		}
+		// optionally fetching user email/display for claims
+		var email string
+		var display sql.NullString
+		_ = pool.QueryRow(r.Context(), `SELECT email, display_name FROM users WHERE id = $1`, userID).Scan(&email, &display)
+
+		// generating the new access token
+		accessTok, err := GenerateJWTWithExpiry(userID, email, display.String, accessTokenTTL)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		// setting access cookie
+		accessCookie := &http.Cookie{
+			Name:     "access_token",
+			Value:    accessTok,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+			Expires:  time.Now().Add(accessTokenTTL),
+		}
+		if r.TLS != nil {
+			accessCookie.Secure = true
+		}
+		http.SetCookie(w, accessCookie)
+
+		// update the refresh cookie with newRaw
+		refreshCookie := &http.Cookie{
+			Name:     "refresh_token",
+			Value:    newRaw,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/api",
+			Expires:  time.Now().Add(refreshTokenTTL),
+		}
+		if r.TLS != nil {
+			refreshCookie.Secure = true
+		}
+		http.SetCookie(w, refreshCookie)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"token": accessTok,
+			"user": map[string]interface{}{
+				"id":           userID,
+				"email":        email,
+				"display_name": display.String,
+			},
+		})
+	})
+}
+
+// LogoutHandler clears the httpOnly access_token cookie and revokes refresh token.
+func LogoutHandler(pool *pgxpool.Pool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// revoking refresh token if cookie present
+		c, err := r.Cookie("refresh_token")
+		if err == nil && c.Value != "" {
+			_ = revokeRefreshToken(pool, c.Value)
+		}
+		// clearing cookies (access & refresh)
+		clear := &http.Cookie{
 			Name:     "access_token",
 			Value:    "",
 			Path:     "/",
@@ -191,10 +375,23 @@ func LogoutHandler() http.Handler {
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 		}
-		if r.TLS != nil {
-			cookie.Secure = true
+		http.SetCookie(w, clear)
+		clearR := &http.Cookie{
+			Name:     "refresh_token",
+			Value:    "",
+			Path:     "/api",
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
 		}
-		http.SetCookie(w, cookie)
+		http.SetCookie(w, clearR)
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+// small type to scan nullable display names
+type sqlNullString struct {
+	String string
+	Valid  bool
 }
