@@ -116,7 +116,18 @@ function init() {
         }
     }
 
-    loadConversations();
+    (async () => {
+        const ok = await refreshAccess();
+        if (!ok) {
+            saveStoredToken("");
+            if (authForm && authInfo && authName) {
+                authForm.style.display = "block";
+                authInfo.style.display = "none";
+                authName.textContent = "";
+            }
+        }
+        loadConversations();
+    })();
 
     composer.addEventListener("submit", onSend);
     document.getElementById("new-conv").addEventListener("click", () => sidebar.classList.toggle("open"));
@@ -161,7 +172,10 @@ function logout() {
     // telling server to clear cookie, then clear client-side token and state
     (async () => {
         try {
-            await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+            const res = await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+            if (res.ok) {
+                try { const body = await res.json().catch(()=>null); console.debug("logout response", body); } catch(_) {}
+            }
         } catch (err) {
             console.warn("logout requeset failed", err);
         }
@@ -182,6 +196,38 @@ function logout() {
         renderConversations();
         closeWs(true);
     })();
+}
+
+// rotating refresh token to obtain a fresh access token
+async function refreshAccess() {
+    try {
+        const res = await fetch("/api/refresh", {
+            method: "GET",
+            credentials: "same-origin",
+        });
+        if (!res.ok) {
+            saveStoredToken("");
+            return false;
+        }
+        const data = await res.json().catch(()=>null);
+        if (data && data.token) {
+            saveStoredToken(data.token);
+        }
+        if (data && data.user && data.user.id) {
+            state.me = data.user.id;
+            if (data.user.display_name) state.users[state.me] = data.user.display_name;
+            if (authForm && authInfo && authName) {
+                authForm.style.display = "none";
+                authInfo.style.display = "inline-block";
+                authName.textContent = data.user.display_name || state.me;
+            }
+        }
+        return true;
+    } catch (err) {
+        console.debug("refreshAccess error", err);
+        saveStoredToken("");
+        return false;
+    }
 }
 
 // Dev user-switch helper (temporary development tool. Will delete it after introducing auth/JWT)

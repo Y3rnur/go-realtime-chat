@@ -51,7 +51,7 @@ func main() {
 	// auth: login (returns token + sets httpOnly cookie)
 	mux.Handle("/api/login", backend.LoginHandler(pool))
 	// auth: logout (clears cookie)
-	mux.Handle("/api/logout", backend.RequireAuth(backend.LogoutHandler(pool)))
+	mux.Handle("/api/logout", backend.LogoutHandler(pool))
 	// auth: refresh (rotates refresh token & issues new access token)
 	mux.Handle("/api/refresh", backend.RefreshHandler(pool))
 

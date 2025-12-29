@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -296,13 +297,39 @@ func LoginHandler(pool *pgxpool.Pool) http.Handler {
 func RefreshHandler(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// reading the cookie
-		c, err := r.Cookie("refresh_token")
-		if err != nil || c.Value == "" {
+		cookieHeader := r.Header.Get("Cookie")
+		var candidates []string
+		if cookieHeader != "" {
+			for _, part := range strings.Split(cookieHeader, ";") {
+				p := strings.TrimSpace(part)
+				if strings.HasPrefix(p, "refresh_token=") {
+					candidates = append(candidates, strings.TrimPrefix(p, "refresh_token="))
+				}
+			}
+		}
+		if c, err := r.Cookie("refresh_token"); err == nil && c.Value != "" {
+			candidates = append([]string{c.Value}, candidates...)
+		}
+
+		if len(candidates) == 0 {
+			log.Printf("refresh: missing cookie (no candidates)")
 			http.Error(w, "missing refresh token", http.StatusUnauthorized)
 			return
 		}
-		newRaw, userID, err := rotateRefreshToken(pool, c.Value)
-		if err != nil {
+
+		var newRaw, userID string
+		var rotateErr error
+		for _, cand := range candidates {
+			log.Printf("refresh: trying candidate (len=%d) from %s", len(cand), r.RemoteAddr)
+			newRaw, userID, rotateErr = rotateRefreshToken(pool, cand)
+			if rotateErr == nil {
+				log.Printf("refresh: rotation succeeded for user %s", userID)
+				break
+			}
+			log.Printf("refresh: candidate rotation failed: %v", rotateErr)
+		}
+		if rotateErr != nil {
+			log.Printf("refresh: all candidates failed")
 			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
 			return
 		}
@@ -386,7 +413,12 @@ func LogoutHandler(pool *pgxpool.Pool) http.Handler {
 			SameSite: http.SameSiteLaxMode,
 		}
 		http.SetCookie(w, clearR)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":      true,
+			"message": "logged out",
+		})
 	})
 }
 
