@@ -273,7 +273,7 @@ func LoginHandler(pool *pgxpool.Pool) http.Handler {
 			Value:    refreshRaw,
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
-			Path:     "/api",
+			Path:     "/",
 			Expires:  time.Now().Add(refreshTokenTTL),
 		}
 		if r.TLS != nil {
@@ -364,7 +364,7 @@ func RefreshHandler(pool *pgxpool.Pool) http.Handler {
 			Value:    newRaw,
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
-			Path:     "/api",
+			Path:     "/",
 			Expires:  time.Now().Add(refreshTokenTTL),
 		}
 		if r.TLS != nil {
@@ -406,13 +406,16 @@ func LogoutHandler(pool *pgxpool.Pool) http.Handler {
 		clearR := &http.Cookie{
 			Name:     "refresh_token",
 			Value:    "",
-			Path:     "/api",
+			Path:     "/",
 			Expires:  time.Unix(0, 0),
 			MaxAge:   -1,
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 		}
 		http.SetCookie(w, clearR)
+		clearR2 := *clearR
+		clearR2.Path = "/api"
+		http.SetCookie(w, &clearR2)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{

@@ -26,18 +26,10 @@ let state = {
     users: {},
 };
 
-// helper to get token from localStorage (dev fallback).
-function getStoredToken() {
-    return localStorage.getItem("access_token") || "";
-}
+// old helper functions needed for dev fallback. Now deleted.
+function getStoredToken() { return ""; }
+function saveStoredToken(tok) { }
 
-function saveStoredToken(tok) {
-    if (!tok) {
-        localStorage.removeItem("access_token");
-    } else {
-        localStorage.setItem("access_token", tok)
-    }
-}
 // Auth UI DOM refs
 let authLoginBtn, authLogoutBtn, authEmail, authPw, authForm, authInfo, authName;
 
@@ -149,9 +141,7 @@ async function login(email, password) {
             return;
         }
         const data = await res.json();
-        if (data && data.token) {
-            saveStoredToken(data.token);    // dev fallback
-        }
+        
         if (data && data.user && data.user.id) {
             state.me = data.user.id;
             if (data.user.display_name) state.users[state.me] = data.user.display_name;
@@ -206,13 +196,10 @@ async function refreshAccess() {
             credentials: "same-origin",
         });
         if (!res.ok) {
-            saveStoredToken("");
             return false;
         }
         const data = await res.json().catch(()=>null);
-        if (data && data.token) {
-            saveStoredToken(data.token);
-        }
+
         if (data && data.user && data.user.id) {
             state.me = data.user.id;
             if (data.user.display_name) state.users[state.me] = data.user.display_name;
@@ -227,30 +214,6 @@ async function refreshAccess() {
         console.debug("refreshAccess error", err);
         saveStoredToken("");
         return false;
-    }
-}
-
-// Dev user-switch helper (temporary development tool. Will delete it after introducing auth/JWT)
-const devSelect = document.getElementById("dev-user-select");
-const devApply = document.getElementById("dev-user-apply");
-if (devApply) {
-    devApply.addEventListener("click", () => {
-        const v = devSelect.value;
-        if (!v) return alert("Choose a dev user id");
-        state.me = v;
-        const selectedText = devSelect.options[devSelect.selectedIndex].text;
-        if (selectedText && selectedText !== "(default)") {
-            state.users[v] = selectedText;
-        }
-        localStorage.setItem("dev_user_id", v);
-        loadConversations();
-        alert("Set user to " + v + " — open another window and pick a different user to test.");
-    });
-    // restore saved
-    const saved = localStorage.getItem("dev_user_id");
-    if (saved) {
-        state.me = saved;
-        try { devSelect.value = saved; } catch (_) {}
     }
 }
 
@@ -521,7 +484,7 @@ async function wsConnect(convId) {
     // prefer cookie auth; stored token included as fallback for dev
     const tokenPart = getStoredToken() ? `&token=${encodeURIComponent(getStoredToken())}` : "";
     const sep = tokenPart ? "&" : "?";
-    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}${tokenPart ? tokenPart : ""}`;
+    const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}`;
     console.debug("[WS] connecting to", url);
     updateConnectionStatus("Connecting...", "connecting");
 
