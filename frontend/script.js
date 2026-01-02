@@ -69,6 +69,44 @@ function getDisplayName(userId) {
     return String(userId).slice(0, 8);
 }
 
+function showToast(message, type = "info", timeout = 4000) {
+    const el = document.createElement("div");
+    el.className = `toast toast-${type}`;
+    el.textContent = message;
+    Object.assign(el.style, {
+        position: "fixed",
+        right: "20px",
+        bottom: "20px",
+        padding: "8px 12px",
+        background: type === "error" ? "#e74c3c" : "#333",
+        color: "#fff",
+        borderRadius: "6px",
+        boxShadow: "0 2px 10px rgba(0, 0, 0, 0.2)",
+        zIndex: 9999,
+        transition: "opacity 0.25s ease",
+    });
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 250); }, timeout);
+}
+
+function handleLoggedOut(message) {
+    try { saveStoredToken(""); } catch(_) {}
+    state.me = DEMO_USER_ID;
+    delete state.users[state.me];
+    state.convs = [];
+    state.active = null;
+    state.messages = {};
+    if (authForm) authForm.style.display = "block";
+    if (authInfo) authInfo.style.display = "none";
+    if (authName) authName.textContent = "";
+    if (messagesEl) messagesEl.innerHTML = "";
+    if (chatNameEl) chatNameEl.textContent = "Select a conversation";
+    if (chatSubEl) chatSubEl.textContent = "-";
+    renderConversations();
+    closeWs(true);
+    if (message) showToast(message, "error", 2000);
+}
+
 function init() {
     if (!state.me || state.me === "3e62ced9-275f-4e96-82f1-d505730df6af") {
         console.warn("Set DEMO_USER_ID in frontend/script.js to a real user UUID.");
@@ -196,6 +234,7 @@ async function refreshAccess() {
             credentials: "same-origin",
         });
         if (!res.ok) {
+            handleLoggedOut("Session expired - please log in.");
             return false;
         }
         const data = await res.json().catch(()=>null);
@@ -212,6 +251,7 @@ async function refreshAccess() {
         return true;
     } catch (err) {
         console.debug("refreshAccess error", err);
+        handleLoggedOut("Network error while refreshing session.");
         saveStoredToken("");
         return false;
     }
@@ -221,6 +261,10 @@ async function loadConversations() {
     try {
         const res = await fetch(api.conversations(), {credentials: "same-origin"});
         if (!res.ok) {
+            if (res.status === 401) {
+                handleLoggedOut("Session expired - please log in.");
+                return;
+            }
             console.error("loadConversations failed:", res.status, res.statusText);
             state.convs = [];
             renderConversations();
@@ -280,7 +324,13 @@ async function openConversation(id) {
 
     try {
         const res = await fetch(api.messages(id), { signal, credentials: "same-origin" });
-        if (!res.ok) throw new Error("Failed to load messages");
+        if (!res.ok) {
+            if (res.status === 401) {
+                handleLoggedOut("Session expired - please log in.");
+                return;
+            }
+            throw new Error("Failed to load messages");
+        }
         const data = await res.json();
 
         if (reqId !== state._messagesReqId || state.active !== id) {
@@ -482,8 +532,6 @@ async function wsConnect(convId) {
 
     const proto = location.protocol ==="https:" ? "wss" : "ws";
     // prefer cookie auth; stored token included as fallback for dev
-    const tokenPart = getStoredToken() ? `&token=${encodeURIComponent(getStoredToken())}` : "";
-    const sep = tokenPart ? "&" : "?";
     const url = `${proto}://${location.host}/ws?conversation_id=${encodeURIComponent(convId)}`;
     console.debug("[WS] connecting to", url);
     updateConnectionStatus("Connecting...", "connecting");
