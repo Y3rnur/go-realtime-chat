@@ -73,12 +73,13 @@ function showToast(message, type = "info", timeout = 4000) {
     const el = document.createElement("div");
     el.className = `toast toast-${type}`;
     el.textContent = message;
+    const bg = type === "error" ? "#e74c3c" : (type === "success" ? "#2ecc71" : (type === "info" ? "#2d9bf0" : "#333"));
     Object.assign(el.style, {
         position: "fixed",
         right: "20px",
         bottom: "20px",
         padding: "8px 12px",
-        background: type === "error" ? "#e74c3c" : "#333",
+        background: bg,
         color: "#fff",
         borderRadius: "6px",
         boxShadow: "0 2px 10px rgba(0, 0, 0, 0.2)",
@@ -186,6 +187,8 @@ async function login(email, password) {
             authForm.style.display = "none";
             authInfo.style.display = "inline-block";
             authName.textContent = data.user.display_name || state.me;
+
+            showToast(`Welcome ${data.user.display_name || "User"}!`, "success", 3000);
             // refreshing conversations and current view
             await loadConversations();
             if (state.active) openConversation(state.active);
@@ -205,8 +208,9 @@ function logout() {
                 try { const body = await res.json().catch(()=>null); console.debug("logout response", body); } catch(_) {}
             }
         } catch (err) {
-            console.warn("logout requeset failed", err);
+            console.warn("logout request failed", err);
         }
+        showToast("Logged out successfully!", "success", 2500);
         saveStoredToken("");
         // clearing client-side auth + conversation/message state and UI
         state.me = DEMO_USER_ID;
