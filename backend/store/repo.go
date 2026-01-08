@@ -118,3 +118,54 @@ func SaveMessage(ctx context.Context, pool *pgxpool.Pool, convID, authorID uuid.
 
 	return m, nil
 }
+
+// CreateConversation creates a conversation and inserts participants atomically.
+func CreateConversation(ctx context.Context, pool *pgxpool.Pool, title *string, isGroup bool, creatorID uuid.UUID, participantIDs []uuid.UUID) (Conversation, error) {
+	var c Conversation
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return c, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// creating conversation row
+	err = tx.QueryRow(ctx, `
+		INSERT INTO conversations (id, title, is_group, created_by, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, now())
+		RETURNING id, title, is_group, created_at
+	`, title, isGroup, creatorID).Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt)
+	if err != nil {
+		return c, err
+	}
+
+	// ensuring that creator is in participants list
+	foundCreator := false
+	for _, p := range participantIDs {
+		if p == creatorID {
+			foundCreator = true
+			break
+		}
+	}
+	if !foundCreator {
+		participantIDs = append(participantIDs, creatorID)
+	}
+
+	// inserting participants
+	for _, p := range participantIDs {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO conversation_participants (conversation_id, user_id, joined_at, role)
+			VALUES ($1, $2, now(), 'member')
+			ON CONFLICT DO NOTHING
+		`, c.ID, p)
+		if err != nil {
+			return c, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return c, err
+	}
+
+	return c, nil
+}

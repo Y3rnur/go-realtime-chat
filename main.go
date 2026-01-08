@@ -99,21 +99,79 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})))
 
-	// GET /api/conversations?user_id=<uuid>
+	// GET /api/conversations
+	// POST /api/conversations
+	// (auth required - user is derived from the access token)
 	mux.Handle("/api/conversations", backend.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uidStr := backend.GetUserIDFromCtx(r.Context())
-		uid, err := uuid.Parse(uidStr)
-		if err != nil {
-			http.Error(w, "invalid user", http.StatusUnauthorized)
+		switch r.Method {
+		case http.MethodGet:
+			uidStr := backend.GetUserIDFromCtx(r.Context())
+			uid, err := uuid.Parse(uidStr)
+			if err != nil {
+				http.Error(w, "invalid user", http.StatusUnauthorized)
+				return
+			}
+			convs, err := store.GetConversationsForUser(r.Context(), pool, uid, 50)
+			if err != nil {
+				http.Error(w, "database error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(convs)
+			return
+
+		case http.MethodPost:
+			// creating a new conversation
+			var req struct {
+				Title        *string  `json:"title"`
+				IsGroup      bool     `json:"is_group"`
+				Participants []string `json:"participants"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+
+			uidStr := backend.GetUserIDFromCtx(r.Context())
+			uid, err := uuid.Parse(uidStr)
+			if err != nil {
+				http.Error(w, "invalid user", http.StatusUnauthorized)
+				return
+			}
+
+			var pIDs []uuid.UUID
+			for _, s := range req.Participants {
+				if s == "" {
+					continue
+				}
+
+				id, err := uuid.Parse(s)
+				if err != nil {
+					http.Error(w, "invalid participant id", http.StatusBadRequest)
+					return
+				}
+
+				pIDs = append(pIDs, id)
+			}
+
+			// determine isGroup if more than 2 participants or explicit flag
+			isGroup := req.IsGroup || len(pIDs) > 1
+
+			conv, err := store.CreateConversation(r.Context(), pool, req.Title, isGroup, uid, pIDs)
+			if err != nil {
+				log.Printf("create conversation error: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(conv)
+			return
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		convs, err := store.GetConversationsForUser(r.Context(), pool, uid, 50)
-		if err != nil {
-			http.Error(w, "database error", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(convs)
 	})))
 
 	// GET /api/messages?conversation_id=<uuid>&limit=50

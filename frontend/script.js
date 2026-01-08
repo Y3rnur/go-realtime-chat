@@ -26,10 +26,6 @@ let state = {
     users: {},
 };
 
-// old helper functions needed for dev fallback. Now deleted.
-function getStoredToken() { return ""; }
-function saveStoredToken(tok) { }
-
 // Auth UI DOM refs
 let authLoginBtn, authLogoutBtn, authEmail, authPw, authForm, authInfo, authName;
 
@@ -136,8 +132,6 @@ function init() {
         });
     }
 
-    // restoring saved token (dev fallback)
-    const savedToken = getStoredToken();
     if (savedToken) {
         // showing auth-info briefly
         if (authForm && authInfo && authName) {
