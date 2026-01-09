@@ -132,15 +132,6 @@ function init() {
         });
     }
 
-    if (savedToken) {
-        // showing auth-info briefly
-        if (authForm && authInfo && authName) {
-            authForm.style.display = "none";
-            authInfo.style.display = "inline-block";
-            authName.textContent = "...";
-        }
-    }
-
     (async () => {
         const ok = await refreshAccess();
         if (!ok) {
