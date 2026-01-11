@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,40 @@ type Message struct {
 	// author info for convenience
 	AuthorName   *string `json:"author_name,omitempty"`
 	AuthorAvatar *string `json:"author_avatar,omitempty"`
+}
+
+type User struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName *string   `json:"display_name,omitempty"`
+	Email       *string   `json:"email,omitempty"`
+}
+
+// SearchUsersByDisplayName does a simple ILIKE lookup for display names.
+func SearchUsersByDisplayName(ctx context.Context, pool *pgxpool.Pool, q string, limit int) ([]User, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT id, display_name, email
+		FROM users
+		WHERE display_name ILIKE '%' || $1 || '%'
+		ORDER BY display_name
+		LIMIT $2
+	`, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.DisplayName, &u.Email); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // GetConversationsForUser returns conversations the user participates in.
@@ -123,6 +158,39 @@ func SaveMessage(ctx context.Context, pool *pgxpool.Pool, convID, authorID uuid.
 func CreateConversation(ctx context.Context, pool *pgxpool.Pool, title *string, isGroup bool, creatorID uuid.UUID, participantIDs []uuid.UUID) (Conversation, error) {
 	var c Conversation
 
+	// deduping participant IDs and ensuring that creator is included
+	seen := map[uuid.UUID]bool{}
+	var unique []uuid.UUID
+	for _, p := range participantIDs {
+		if p == uuid.Nil {
+			continue
+		}
+		if !seen[p] {
+			seen[p] = true
+			unique = append(unique, p)
+		}
+	}
+	if !seen[creatorID] {
+		unique = append(unique, creatorID)
+		seen[creatorID] = true
+	}
+
+	if len(unique) == 0 {
+		// ensuring that at least creator is included
+		unique = append(unique, creatorID)
+	}
+
+	var existingCount int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(1) FROM users WHERE id = ANY($1)
+	`, unique).Scan(&existingCount)
+	if err != nil {
+		return c, err
+	}
+	if existingCount != len(unique) {
+		return c, fmt.Errorf("one or more participant IDs are invalid")
+	}
+
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return c, err
@@ -139,26 +207,13 @@ func CreateConversation(ctx context.Context, pool *pgxpool.Pool, title *string, 
 		return c, err
 	}
 
-	// ensuring that creator is in participants list
-	foundCreator := false
-	for _, p := range participantIDs {
-		if p == creatorID {
-			foundCreator = true
-			break
-		}
-	}
-	if !foundCreator {
-		participantIDs = append(participantIDs, creatorID)
-	}
-
 	// inserting participants
-	for _, p := range participantIDs {
-		_, err := tx.Exec(ctx, `
+	for _, p := range unique {
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO conversation_participants (conversation_id, user_id, joined_at, role)
 			VALUES ($1, $2, now(), 'member')
 			ON CONFLICT DO NOTHING
-		`, c.ID, p)
-		if err != nil {
+		`, c.ID, p); err != nil {
 			return c, err
 		}
 	}
