@@ -3,17 +3,33 @@ BEGIN;
 -- Adding sample users
 INSERT INTO users (id, email, phone, password_hash, first_name, last_name, display_name, avatar_url, is_verified, created_at)
 VALUES 
-    (gen_random_uuid(), 'alice@example.test', '+10000000001', 'bcrypt:$2y$10$placeholderalice', 'Alice', 'Anderson', 'Alice', 'https://i.pravatar.cc/150?u=alice', TRUE, now())
+    (gen_random_uuid(), 'alice@example.test', '+10000000001', '$2a$10$oyUjzPk72wqxTW0Oq8tbtekP738csqXwnJQfGqeODV4UJKmnC85Yq', 'Alice', 'Anderson', 'Alice', 'https://i.pravatar.cc/150?u=alice', TRUE, now())
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO users (id, email, phone, password_hash, first_name, last_name, display_name, avatar_url, is_verified, created_at)
 VALUES
-    (gen_random_uuid(), 'bob@example.test', '+10000000002', 'bcrypt:$2y$10$placeholderbob', 'Bob', 'Brown', 'Bob', 'https://i.pravatar.cc/150?u=bob', TRUE, now())
+    (gen_random_uuid(), 'bob@example.test', '+10000000002', '$2a$10$oyUjzPk72wqxTW0Oq8tbtekP738csqXwnJQfGqeODV4UJKmnC85Yq', 'Bob', 'Brown', 'Bob', 'https://i.pravatar.cc/150?u=bob', TRUE, now())
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO users (id, email, phone, password_hash, first_name, last_name, display_name, avatar_url, is_verified, created_at)
 VALUES
-    (gen_random_uuid(), 'charlie@example.test', '+10000000003', 'bcrypt:$2y$10$placeholdercharlie', 'Charlie', 'Clark', 'Charlie', 'https://i.pravatar.cc/150?u=charlie', TRUE, now())
+    (gen_random_uuid(), 'charlie@example.test', '+10000000003', '$2a$10$oyUjzPk72wqxTW0Oq8tbtekP738csqXwnJQfGqeODV4UJKmnC85Yq', 'Charlie', 'Clark', 'Charlie', 'https://i.pravatar.cc/150?u=charlie', TRUE, now())
+ON CONFLICT (email) DO NOTHING;
+
+-- Additional mock users
+INSERT INTO users (id, email, phone, password_hash, first_name, last_name, display_name, avatar_url, is_verified, created_at)
+VALUES
+    (gen_random_uuid(), 'dave@example.test', '+10000000004', '$2a$10$oyUjzPk72wqxTW0Oq8tbtekP738csqXwnJQfGqeODV4UJKmnC85Yq', 'Dave', 'Dawson', 'Dave', 'https://i.pravatar.cc/150?u=dave', TRUE, now())
+ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO users (id, email, phone, password_hash, first_name, last_name, display_name, avatar_url, is_verified, created_at)
+VALUES
+    (gen_random_uuid(), 'eve@example.test', '+10000000005', '$2a$10$oyUjzPk72wqxTW0Oq8tbtekP738csqXwnJQfGqeODV4UJKmnC85Yq', 'Eve', 'Evans', 'Eve', 'https://i.pravatar.cc/150?u=eve', TRUE, now())
+ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO users (id, email, phone, password_hash, first_name, last_name, display_name, avatar_url, is_verified, created_at)
+VALUES
+    (gen_random_uuid(), 'frank@example.test', '+10000000006', '$2a$10$oyUjzPk72wqxTW0Oq8tbtekP738csqXwnJQfGqeODV4UJKmnC85Yq', 'Frank', 'Foster', 'Frank', 'https://i.pravatar.cc/150?u=frank', TRUE, now())
 ON CONFLICT (email) DO NOTHING;
 
 -- Sample conversation and messages
@@ -57,7 +73,7 @@ FROM target t
 JOIN users u ON u.email IN ('alice@example.test', 'bob@example.test')
 ON CONFLICT DO NOTHING;
 
--- Creating group conversation 'Team'
+-- Creating group conversation 'Team' (Alice, Bob, Charlie)
 WITH g AS (
     INSERT INTO conversations (id, is_group, title, created_by, created_at)
     VALUES (gen_random_uuid(), TRUE, 'Team', (SELECT id FROM users WHERE email = 'alice@example.test'), now())
@@ -91,6 +107,42 @@ SELECT gen_random_uuid(), tg.id, u.id,
     now() - (INTERVAL '23 hours')
 FROM target_group tg
 JOIN users u ON u.email IN ('alice@example.test', 'bob@example.test', 'charlie@example.test')
+ON CONFLICT DO NOTHING;
+
+-- Creating extra group conversation 'Project' (Dave, Eve, Frank)
+WITH pg AS (
+    INSERT INTO conversations (id, is_group, title, created_by, created_at)
+    VALUES (gen_random_uuid(), TRUE, 'Project', (SELECT id FROM users WHERE email = 'dave@example.test'), now())
+    ON CONFLICT DO NOTHING
+    RETURNING id
+),
+pg_sel AS (
+    SELECT id FROM pg
+    UNION
+    SELECT id FROM conversations WHERE is_group = TRUE AND title = 'Project' LIMIT 1
+)
+INSERT INTO conversation_participants (conversation_id, user_id, joined_at)
+SELECT pgs.id, u.id, now() - (INTERVAL '3 days')
+FROM pg_sel pgs
+CROSS JOIN users u
+WHERE u.email IN ('dave@example.test', 'eve@example.test', 'frank@example.test')
+ON CONFLICT (conversation_id, user_id) DO NOTHING;
+
+-- Sample messages for 'Project'
+WITH target_proj AS (
+    SELECT id FROM conversations WHERE is_group = TRUE AND title = 'Project' LIMIT 1
+)
+INSERT INTO messages (id, conversation_id, author_id, body, message_type, created_at)
+SELECT gen_random_uuid(), tp.id, u.id,
+    CASE u.email
+        WHEN 'dave@example.test' THEN 'Meeting tomorrow at 09:00.'
+        WHEN 'eve@example.test' THEN 'I will bring the docs.'
+        WHEN 'frank@example.test' THEN 'I can prep slides.'
+    END,
+    'text',
+    now() - (INTERVAL '2 days')
+FROM target_proj tp
+JOIN users u ON u.email IN ('dave@example.test', 'eve@example.test', 'frank@example.test')
 ON CONFLICT DO NOTHING;
 
 COMMIT;
