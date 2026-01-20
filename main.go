@@ -99,6 +99,25 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})))
 
+	// GET /api/users?q=<query>     - returns basic user list for participant picker
+	mux.Handle("/api/users", backend.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		log.Printf("users search q=%q from %s", q, r.RemoteAddr)
+		if strings.TrimSpace(q) == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]any{})
+			return
+		}
+		users, err := store.SearchUsersByDisplayName(r.Context(), pool, q, 20)
+		if err != nil {
+			log.Printf("search users error: %v", err)
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(users)
+	})))
+
 	// GET /api/conversations
 	// POST /api/conversations
 	// (auth required - user is derived from the access token)

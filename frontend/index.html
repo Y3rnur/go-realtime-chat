@@ -58,5 +58,29 @@
                 </form>
             </main>
         </div>
+        <!-- New Conversation Modal -->
+        <div id="new-conv-modal" class="modal" style="display:none;">
+            <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="new-conv-title" style="max-width:480px;padding:16px;background:#0f1720;color:#fff;border-radius:8px;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10000;">
+                <h3 id="new-conv-title">New Conversation</h3>
+                <label>
+                    <div>Title (optional)</div>
+                    <input id="nc-title" type="text" placeholder="Conversation title" style="width:100%;padding:8px;margin:6px 0;">
+                </label>
+                <label>
+                    <input id="nc-is-group" type="checkbox"> Group Conversation
+                </label>
+                <div style="margin-top:8px;">
+                    <div>Add participants</div>
+                    <input id="nc-search" type="search" placeholder="Search users by name" style="width:100%;padding:8px;margin:6px 0;">
+                    <ul id="nc-results" style="list-style:none;padding:0;margin:0 0 8px 0;max-height:160px;overflow:auto;"></ul>
+                    <div id="nc-selected" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                </div>
+                <div style="margin-top:12px;text-align:right;">
+                    <button id="nc-cancel" style="margin-right:8px;padding:8px 12px;">Cancel</button>
+                    <button id="nc-create" style="padding:8px 12px;background:#5b21b6;color:#fff;border:none;border-radius:4px;">Create</button>
+                </div>
+            </div>
+            <div class="modal-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.5)"></div>
+        </div>
     </body>
 </html>

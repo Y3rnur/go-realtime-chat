@@ -13,7 +13,7 @@ help:
 
 run start:
 	@set -a; \
-	[ -f .env ] && . ./ .env; \
+	[ -f .env ] && . ./.env; \
 	set +a; \
 	export JWT_SECRET=$${JWT_SECRET:-dev_jwt_secret}; \
 	go run .

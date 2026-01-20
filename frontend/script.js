@@ -26,6 +26,9 @@ let state = {
     users: {},
 };
 
+function getStoredToken() { return ""; }
+function saveStoredToken(tok) { /* no-op for cookie-only auth*/ }
+
 // Auth UI DOM refs
 let authLoginBtn, authLogoutBtn, authEmail, authPw, authForm, authInfo, authName;
 
@@ -146,8 +149,124 @@ function init() {
     })();
 
     composer.addEventListener("submit", onSend);
-    document.getElementById("new-conv").addEventListener("click", () => sidebar.classList.toggle("open"));
+    document.getElementById("new-conv").addEventListener("click", (e) => { e.preventDefault(); openNewConversationModal(); });
+    wireNewConversationModal();
     backBtn.addEventListener("click", () => sidebar.classList.add("open"));
+}
+
+// New conversation modal logic
+let ncSelected = [];    // array of { id, display_name }
+function openNewConversationModal() {
+    ncSelected = [];
+    document.getElementById("nc-title").value = "";
+    document.getElementById("nc-is-group").checked = false;
+    document.getElementById("nc-search").value = "";
+    document.getElementById("nc-results").innerHTML = "";
+    document.getElementById("nc-selected").innerHTML = "";
+    document.getElementById("new-conv-modal").style.display = "block";
+    document.getElementById("nc-search").focus();
+}
+
+function closeNewConversationModal() {
+    document.getElementById("new-conv-modal").style.display = "none";
+}
+
+function renderSelectedParticipants() {
+    const container = document.getElementById("nc-selected");
+    container.innerHTML = "";
+    for (const p of ncSelected) {
+        const pill = document.createElement("div");
+        pill.style.cssText = "background:#1f2937;color#fff;padding:6px 8px;border-radius:999px;display:flex;align-items:center;gap:8px";
+        pill.innerHTML = `<span>${escapeHtml(p.display_name || p.id)}</span><button data-id="${p.id}" style="background:transparent;border:none;color:#fff;cursor:pointer">X</button>`;
+        pill.querySelector("button").addEventListener("click", (e) => {
+            const id = e.currentTarget.getAttribute("data-id");
+            ncSelected = ncSelected.filter(x => String(x.id) !== String(id));
+            renderSelectedParticipants();
+        });
+        container.appendChild(pill);
+    }
+}
+
+let ncSearchTimer = null;
+
+// wire modal buttons (also called from init)
+function wireNewConversationModal() {
+    const ncCancel = document.getElementById("nc-cancel");
+    const ncCreate = document.getElementById("nc-create");
+    const ncSearch = document.getElementById("nc-search");
+    const ncResults = document.getElementById("nc-results");
+
+    ncCancel.addEventListener("click", () => closeNewConversationModal());
+
+    ncSearch.addEventListener("input", () => {
+        if (ncSearchTimer) clearTimeout(ncSearchTimer);
+        ncSearchTimer = setTimeout(async () => {
+            const q = ncSearch.value.trim();
+            ncResults.innerHTML = "";
+            if (!q) return;
+            try {
+                console.debug("[NC] search users q=", q);
+                const res = await fetch(`/api/users?q=${encodeURIComponent(q)}`, { credentials: "same-origin"});
+                console.debug("[NC] /api/users status=", res.status);
+                if (!res.ok) {
+                    // brief message for non-200
+                    ncResults.innerHTML = `<li style="padding:6px;color:#faa">Search error (${res.status})</li>`;
+                    return;
+                }
+                const users = await res.json();
+                ncResults.innerHTML = "";
+                if (!Array.isArray(users) || users.length === 0) {
+                    ncResults.innerHTML = `<li style="padding:6px;color:#999">No users found</li>`;
+                    return;
+                }
+                for (const u of users) {
+                    const li = document.createElement("li");
+                    li.style.cssText = "padding:6px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer";
+                    li.textContent = u.display_name || u.email || String(u.id);
+                    li.addEventListener("click", () => {
+                        // add if not already selected
+                        if (!ncSelected.some(x => String(x.id) === String(u.id))) {
+                            ncSelected.push(u);
+                            renderSelectedParticipants();
+                        }
+                    });
+                    ncResults.appendChild(li);
+                }
+            } catch (err) {
+                console.error("user search failed", err);
+                ncResults.innerHTML = `<li style="padding:6px;color:#faa">Network error</li>`;
+            }
+        }, 250);
+    });
+
+    ncCreate.addEventListener("click", async () => {
+        const title = document.getElementById("nc-title").value.trim() || null;
+        const isGroup = document.getElementById("nc-is-group").checked;
+        const participants = ncSelected.map(p => String(p.id));
+        try {
+            const res = await fetch("/api/conversations", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title, is_group: isGroup, participants})
+            });
+            if (!res.ok) {
+                const body = await res.text().catch(()=>"");
+                showToast("Failed to create conversation: " + (body || res.status), "error", 4000);
+                return;
+            }
+            const conv = await res.json();
+            // optionally refresh conversation list. We will add new conv to state
+            state.convs = state.convs || [];
+            state.convs.unshift(conv);
+            renderConversations();
+            showToast("Conversation created", "success", 2500);
+            closeNewConversationModal();
+        } catch (err) {
+            console.error("create conversation failed", err);
+            showToast("Network error creating conversation", "error", 4000);
+        }
+    });
 }
 
 // login helper
