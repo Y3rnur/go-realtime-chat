@@ -125,8 +125,8 @@ func (h *Hub) broadcastLocal(convID string, v interface{}) {
 
 // run a pattern subscription and relay to local clients
 func (h *Hub) runPubSub() {
-	pubsub := h.redis.PSubscribe(h.ctx, "messages:conversation:*", "events:conversation:*", "presence:conversation:*")
-	log.Printf("hub: started redis psubscribe to messages:conversation:*, events:conversation:*, presence:conversation:*")
+	pubsub := h.redis.PSubscribe(h.ctx, "messages:conversation:*", "events:conversation:*", "events:user:*", "presence:conversation:*")
+	log.Printf("hub: started redis psubscribe to messages:conversation:, events:conversation:, events:user:, presence:conversation:")
 	ch := pubsub.Channel()
 	for {
 		select {
@@ -137,24 +137,40 @@ func (h *Hub) runPubSub() {
 			if !ok {
 				return
 			}
-			// extracting convID from channel name
+			// extracting message details (info shown below)
 			parts := strings.SplitN(msg.Channel, ":", 3)
 			if len(parts) < 3 {
 				continue
 			}
-			chanType := parts[0]
-			convID := parts[2]
-			var payload json.RawMessage = json.RawMessage(msg.Payload)
-			h.mu.RLock()
-			clients := h.clients[convID]
-			h.mu.RUnlock()
-			if len(clients) == 0 {
-				log.Printf("hub: received %s for conv %s but no local clients", chanType, convID)
+			scope := parts[1] // "conversation" or "user"
+			id := parts[2]    // convID or userID
+			payload := json.RawMessage(msg.Payload)
+
+			if scope == "conversation" {
+				h.mu.RLock()
+				clients := h.clients[id]
+				h.mu.RUnlock()
+				if len(clients) == 0 {
+					log.Printf("hub: received conversation events for conv %s but no local clients", id)
+					continue
+				}
+				for c := range clients {
+					c.send(payload)
+				}
 				continue
 			}
-			log.Printf("hub: relaying %s for conv %s to %d client(s)", chanType, convID, len(clients))
-			for c := range clients {
-				c.send(payload)
+
+			if scope == "user" {
+				h.mu.RLock()
+				for _, clients := range h.clients {
+					for c := range clients {
+						if c.userID == id {
+							c.send(payload)
+						}
+					}
+				}
+				h.mu.RUnlock()
+				continue
 			}
 		}
 	}
@@ -172,6 +188,33 @@ func (h *Hub) PublishEvent(convID string, v interface{}) error {
 		return err
 	}
 	chanName := "events:conversation:" + convID
+	return h.redis.Publish(h.ctx, chanName, b).Err()
+}
+
+// publishes conversation creation events to each participant to events channel
+func (h *Hub) PublishUserEvent(userID string, v interface{}) error {
+	if h.redis == nil {
+		// local delivery (sending to connected clients owned by userID)
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+		for _, clients := range h.clients {
+			for c := range clients {
+				if c.userID == userID {
+					c.send(b)
+				}
+			}
+		}
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	chanName := "events:user:" + userID
 	return h.redis.Publish(h.ctx, chanName, b).Err()
 }
 

@@ -9,11 +9,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// validation errors
+var (
+	ErrDirectConversationsExists = fmt.Errorf("direct conversation already exists")
+	ErrInvalidDirectParticipants = fmt.Errorf("invalid direct participants")
+)
+
 type Conversation struct {
-	ID        uuid.UUID `json:"id"`
-	Title     *string   `json:"title,omitempty"`
-	IsGroup   bool      `json:"is_group"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          uuid.UUID `json:"id"`
+	Title       *string   `json:"title,omitempty"`
+	IsGroup     bool      `json:"is_group"`
+	CreatedAt   time.Time `json:"created_at"`
+	DisplayName *string   `json:"display_name,omitempty"`
 }
 
 type Message struct {
@@ -69,7 +76,13 @@ func GetConversationsForUser(ctx context.Context, pool *pgxpool.Pool, userID uui
 	}
 
 	rows, err := pool.Query(ctx, `
-	SELECT c.id, c.title, c.is_group, c.created_at
+	SELECT c.id, c.title, c.is_group, c.created_at,
+		(
+			SELECT u.display_name FROM conversation_participants cp2
+			JOIN users u ON u.id = cp2.user_id
+			WHERE cp2.conversation_id = c.id AND cp2.user_id <> $1
+			LIMIT 1
+		) as display_name
 	FROM conversation_participants cp
 	JOIN conversations c ON c.id = cp.conversation_id
 	WHERE cp.user_id = $1
@@ -83,7 +96,7 @@ func GetConversationsForUser(ctx context.Context, pool *pgxpool.Pool, userID uui
 	var out []Conversation
 	for rows.Next() {
 		var c Conversation
-		if err := rows.Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt, &c.DisplayName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -175,6 +188,39 @@ func CreateConversation(ctx context.Context, pool *pgxpool.Pool, title *string, 
 		seen[creatorID] = true
 	}
 
+	// if not group, require exactly two unique participants (creator + one other)
+	if !isGroup {
+		if len(unique) != 2 {
+			return c, ErrInvalidDirectParticipants
+		}
+
+		// finding the other user id
+		var other uuid.UUID
+		for _, u := range unique {
+			if u != creatorID {
+				other = u
+				break
+			}
+		}
+		// checking for existing non-group conversation between creator and other with exactly 2 participants
+		var exists bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM conversations c
+				WHERE c.is_group = FALSE
+					AND EXISTS(SELECT 1 FROM conversation_participants cp1 WHERE cp1.conversation_id = c.id AND cp1.user_id = $1)
+					AND EXISTS(SELECT 1 FROM conversation_participants cp2 WHERE cp2.conversation_id = c.id AND cp2.user_id = $2)
+					AND (SELECT COUNT(*) FROM conversation_participants cp3 WHERE cp3.conversation_id = c.id) = 2
+			)
+		`, creatorID, other).Scan(&exists)
+		if err != nil {
+			return c, err
+		}
+		if exists {
+			return c, ErrDirectConversationsExists
+		}
+	}
+
 	if len(unique) == 0 {
 		// ensuring that at least creator is included
 		unique = append(unique, creatorID)
@@ -197,12 +243,17 @@ func CreateConversation(ctx context.Context, pool *pgxpool.Pool, title *string, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	var titleArg *string = title
+	if !isGroup {
+		titleArg = nil
+	}
+
 	// creating conversation row
 	err = tx.QueryRow(ctx, `
 		INSERT INTO conversations (id, title, is_group, created_by, created_at)
 		VALUES (gen_random_uuid(), $1, $2, $3, now())
 		RETURNING id, title, is_group, created_at
-	`, title, isGroup, creatorID).Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt)
+	`, titleArg, isGroup, creatorID).Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt)
 	if err != nil {
 		return c, err
 	}

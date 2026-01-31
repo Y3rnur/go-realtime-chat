@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -39,6 +40,13 @@ func main() {
 		redisOpt.Password = p
 	}
 	redisClient := redis.NewClient(redisOpt)
+	// verifying Redis connectivity (in case it fails, local-only hub proceeds)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		log.Printf("redis: ping failed (%v) - continuing without redis (local-only)", err)
+		redisClient = nil
+	} else {
+		log.Printf("redis: connected to %s", redisAddr)
+	}
 
 	hub := ws.NewHub(redisClient, pool)
 	defer hub.Close()
@@ -173,15 +181,121 @@ func main() {
 				pIDs = append(pIDs, id)
 			}
 
+			if !req.IsGroup && len(pIDs) > 1 {
+				http.Error(w, "cannot create direct conversation with multiple participants; check 'group' to create a group chat", http.StatusBadRequest)
+				return
+			}
+
 			// determine isGroup if more than 2 participants or explicit flag
 			isGroup := req.IsGroup || len(pIDs) > 1
 
 			conv, err := store.CreateConversation(r.Context(), pool, req.Title, isGroup, uid, pIDs)
 			if err != nil {
+				if errors.Is(err, store.ErrInvalidDirectParticipants) {
+					http.Error(w, "invalid direct conversation participants (choose exactly one user for a direct chat)", http.StatusBadRequest)
+					return
+				}
+				if errors.Is(err, store.ErrDirectConversationsExists) {
+					http.Error(w, "direct conversation between these users already exists", http.StatusConflict)
+					return
+				}
 				log.Printf("create conversation error: %v", err)
 				http.Error(w, "server error", http.StatusInternalServerError)
 				return
 			}
+
+			go func() {
+				// publishing a conversation-level event for any local subscribers
+				payloadConv := map[string]interface{}{
+					"type":         "conversation_created",
+					"conversation": conv,
+				}
+				// publish to conversation channel (existing)
+				if err := hub.PublishEvent(conv.ID.String(), payloadConv); err != nil {
+					log.Printf("publish conversation_created (conversation channel) error: %v", err)
+				}
+
+				// build recipients (creator + explicit participants, no duplicates)
+				recipients := make([]uuid.UUID, 0, len(pIDs)+1)
+				seenRecip := map[uuid.UUID]struct{}{}
+				seenRecip[uid] = struct{}{}
+				recipients = append(recipients, uid) // include creator
+				// per user notifications
+				for _, p := range pIDs {
+					// avoid duplicates
+					if p == uid {
+						continue
+					}
+					if _, ok := seenRecip[p]; ok {
+						continue
+					}
+					seenRecip[p] = struct{}{}
+					recipients = append(recipients, p)
+				}
+
+				// gather user IDs to query for display names (single DB call)
+				userIDs := make([]uuid.UUID, 0, len(recipients)+len(pIDs))
+				userSet := map[uuid.UUID]struct{}{}
+				for _, u := range recipients {
+					if _, ok := userSet[u]; !ok {
+						userSet[u] = struct{}{}
+						userIDs = append(userIDs, u)
+					}
+				}
+
+				// fetch display names in one query
+				nameMap := map[uuid.UUID]string{}
+				if len(userIDs) > 0 {
+					rows, err := pool.Query(context.Background(), `SELECT id, display_name FROM users WHERE id = ANY($1)`, userIDs)
+					if err != nil {
+						log.Printf("fetch display names error: %v", err)
+					} else {
+						defer rows.Close()
+						for rows.Next() {
+							var id uuid.UUID
+							var dn *string
+							if err := rows.Scan(&id, &dn); err != nil {
+								continue
+							}
+							if dn != nil {
+								nameMap[id] = *dn
+							}
+						}
+					}
+				}
+
+				// notify each recipient with a user-specific view (non-blocking publish)
+				for _, recip := range recipients {
+					convForUser := conv // shallow copy (struct)
+					if !conv.IsGroup {
+						// resolve the peer if for this recipient
+						var peer uuid.UUID
+						if recip == uid {
+							if len(pIDs) > 0 {
+								peer = pIDs[0]
+							}
+						} else {
+							peer = uid
+						}
+						if dn, ok := nameMap[peer]; ok {
+							convForUser.DisplayName = &dn
+						}
+					}
+
+					payloadUser := map[string]interface{}{
+						"type":         "conversation_created",
+						"conversation": convForUser,
+					}
+
+					// publish asynchronously to avoid blocking the handler
+					go func(userID string, payload map[string]interface{}) {
+						if err := hub.PublishUserEvent(userID, payload); err != nil {
+							log.Printf("publish conversation_created (user %s) error: %v", userID, err)
+						}
+					}(recip.String(), payloadUser)
+				}
+			}()
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(conv)

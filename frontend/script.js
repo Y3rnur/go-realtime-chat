@@ -399,13 +399,14 @@ function renderConversations() {
         return;
     }
     for (const c of state.convs) {
+        const display = c.is_group ? (c.title || "Group") : (c.display_name || (c.title || "Direct"));
         const li = document.createElement("li");
         li.className = c.id === state.active ? "active" : "";
         li.tabIndex = 0;
         li.innerHTML = `
             <img class="avatar" src="https://via.placeholder.com/40" alt="avatar" />
             <div class="conv-meta">
-                <div class="name">${escapeHtml(c.title || "Direct")}</div>
+                <div class="name">${escapeHtml(display)}</div>
                 <div class="last"></div>
             </div>
         `;
@@ -669,6 +670,19 @@ async function wsConnect(convId) {
             const msg = JSON.parse(ev.data);
             if (msg && msg.type) {
                 switch (msg.type) {
+                    case "conversation_created": {
+                        if (msg.conversation) {
+                            const conv = msg.conversation;
+                            state.convs = state.convs || [];
+                            // avoiding duplicates
+                            if (!state.convs.find(c => c.id === conv.id)) {
+                                state.convs.unshift(conv);
+                                renderConversations();
+                                showToast("New conversation created", "info", 3000);
+                            }
+                        }
+                        break;
+                    }
                     case "typing": {
                         // showing typing indicator in chatSubEl temporarily
                         if (msg.user_id === state.me) break;
