@@ -484,6 +484,76 @@ async function openConversation(id) {
     }
 }
 
+function attachMsgHoverMenus(convId) {
+    const container = messagesEl;
+    if (!container) return;
+    // close any open menu when clicking outside - add listener only once
+    if (!window._msgMenuDocListenerAttached) {
+        document.addEventListener("click", (e) => {
+            const open = container.querySelectorAll(".msg-menu.open");
+            open.forEach(m => {
+                if (!m.contains(e.target) && !e.target.closest(".msg-hover-trigger")) m.classList.remove("open");
+            });
+        });
+        window._msgMenuDocListenerAttached = true;
+    }
+
+    for (const el of container.querySelectorAll(".msg")) {
+        const msgId = el.getAttribute("data-msg-id");
+        if (!msgId) continue;
+        // avoid re-adding
+        if (el.querySelector(".msg-hover-trigger")) continue;
+
+        // find corresponding message in state to check author and deleted state
+        const list = state.messages[convId] || [];
+        const msg = list.find(x => String(x.id) === String(msgId));
+        if (!msg) continue;
+        const isMeMsg = String(msg.author_id) === String(state.me);
+        const isDeleted = !!msg.deleted || !!msg.is_deleted;
+        // only show menu for own non-deleted messages
+        if (!isMeMsg || isDeleted) continue;
+
+        // create trigger
+        const trigger = document.createElement("button");
+        trigger.className = "msg-hover-trigger";
+        trigger.type = "button";
+        el.appendChild(trigger);
+
+        // create menu
+        const menu = document.createElement("div");
+        menu.className = "msg-menu";
+        const editBtn = document.createElement("button");
+        editBtn.className = "edit";
+        editBtn.textContent = "Edit";
+        const delBtn = document.createElement("button");
+        delBtn.className = "delete";
+        delBtn.textContent = "Delete";
+        menu.appendChild(editBtn);
+        menu.appendChild(delBtn);
+        el.appendChild(menu);
+
+        // wire trigger toggle
+        trigger.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            // close other menus
+            container.querySelectorAll(".msg-menu.open").forEach(m => { if (m !== menu) m.classList.remove("open"); });
+            menu.classList.toggle("open");
+        });
+
+        // wire buttons to existing handlers (assumes functions exist)
+        editBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            menu.classList.remove("open");
+            openInlineEditor(convId, msgId);
+        });
+        delBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            menu.classList.remove("open");
+            confirmDeleteMessage(msgId);
+        });
+    }
+}
+
 function renderMessages(convId, opts = {}) {
     messagesEl.innerHTML = "";
     const list = state.messages[convId] || [];
@@ -505,17 +575,122 @@ function renderMessages(convId, opts = {}) {
 
         const div = document.createElement("div");
         const isMe = String(m.author_id) === String(state.me);
+        const isDeleted = !!m.deleted || !!m.is_deleted;
+        const isEdited = !!m.edited_at;
+
         div.className = "msg " + (isMe ? "me" : "them");
+        div.setAttribute("data-msg-id", m.id);
 
         const authorLine = !isMe && m.author_name ? `<div class="author">${escapeHtml(m.author_name)}</div>` : "";
-        div.innerHTML = `${authorLine}<div class="text">${escapeHtml(m.body || "")}</div><span class="time">${formatTime(m.created_at)}</span>`;
-        div.setAttribute("data-date", dateKey);
-
+        const bodyHtml = isDeleted
+            ? `<div class="text deleted">Message deleted</div>`
+            : `<div class="text">${escapeHtml(m.body || "")}</div>` + (isEdited ? `<div class="edited">(edited)</div>` : '');
+        
+        // actions will be provided by the hover menu (meatball trigger).
+        div.innerHTML = `${authorLine}${bodyHtml}<span class="time">${formatTime(m.created_at)}</span>`;
         messagesEl.appendChild(div);
     }
     
+    attachMsgHoverMenus(convId);
     if (opts.scrollToBottom !== false) {
         messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+}
+
+function openInlineEditor(convId, msgId) {
+    const list = state.messages[convId] || [];
+    const msg = list.find(x => String(x.id) === String(msgId));
+    if (!msg) return;
+    const curText = msg.body || "";
+    const msgEl = messagesEl.querySelector(`[data-msg-id="${msgId}"]`);
+    if (!msgEl) return;
+    // creating inline editor
+    msgEl.innerHTML = `<div class="inline-edit">
+        <textarea class="edit-input" rows="3">${escapeHtml(curText)}</textarea>
+        <div style="margin-top:6px">
+            <button class="save-edit">Save</button>
+            <button class="cancel-edit">Cancel</button>
+        </div>
+    </div>`;
+    const saveBtn = msgEl.querySelector(".save-edit");
+    const cancelBtn = msgEl.querySelector(".cancel-edit");
+    const input = msgEl.querySelector(".edit-input");
+    saveBtn.addEventListener("click", async () => {
+        const newBody = input.value.trim();
+        if (!newBody) { showToast("Message cannot be empty", "error"); return; }
+        await saveEditedMessage(convId, msgId, newBody);
+    });
+    cancelBtn.addEventListener("click", () => {
+        renderMessages(convId);
+    });
+}
+
+async function saveEditedMessage(convId, msgId, newBody) {
+    const list = state.messages[convId] || [];
+    const idx = list.findIndex(m => String(m.id) === String(msgId));
+    if (idx == -1) return;
+    const old = { ...list[idx] };
+
+    // optimistic update
+    list[idx].body = newBody;
+    list[idx].edited_at = new Date().toISOString();
+    renderMessages(convId);
+    
+    try {
+        const res = await fetch("/api/messages", {
+            method: "PATCH",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: msgId, body: newBody }),
+        });
+        if (!res.ok) {
+            const txt = await res.text().catch(()=>"");
+            // restore on failure
+            list[idx] = old;
+            renderMessages(convId);
+            showToast("Failed to edit message: " + (txt || res.status), "error");
+            return;
+        }
+        const updated = await res.json();
+        // replacing with server-canonical message and re-render
+        list[idx] = updated;
+        renderMessages(convId);
+        showToast("Message edited successfully!", "success");
+    } catch (err) {
+        list[idx] = old;
+        renderMessages(convId);
+        showToast("Network error editing message", "error");
+    }
+}
+
+async function confirmDeleteMessage(msgId) {
+    if (!confirm("Delete this message? This cannot be undone.")) return;
+    try {
+        const res = await fetch("/api/messages", {
+            method: "DELETE",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: msgId }),
+        });
+        if (res.status === 204) {
+            // apply locally
+            for (const convId in state.messages) {
+                const list = state.messages[convId];
+                const idx = list.findIndex(m => String(m.id) === String(msgId));
+                if (idx >= 0) {
+                    list[idx].body = null;
+                    list[idx].deleted = true;
+                    renderMessages(convId);
+                    break;
+                }
+            }
+            showToast("Message deleted successfully!", "success");
+            return;
+        }
+        const txt = await res.text().catch(()=>"");
+        showToast("Failed to delete message: " + (txt || res.status), "error");
+    } catch (err) {
+        showToast("Network error deleting message", "error");
     }
 }
 
@@ -732,6 +907,41 @@ async function wsConnect(convId) {
                             }, 3000);
                         }
                         break;
+                    }
+                    case "message_updated": {
+                        const m = msg.message;
+                        // find and replace by id
+                        for (const convId in state.messages) {
+                            const list = state.messages[convId];
+                            const idx = list.findIndex(x => String(x.id) === String(m.id));
+                            if (idx >= 0) {
+                                list[idx] = { ...list[idx], ...m };
+                                renderMessages(convId);
+                                return;
+                            }
+                        }
+                        // not found: append to conversation list
+                        if (m && m.conversation_id) {
+                            state.messages[m.conversation_id] = state.messages[m.conversation_id] || [];
+                            state.messages[m.conversation_id].push(m);
+                            if (state.active === m.conversation_id) renderMessages(m.conversation_id);
+                        }
+                        return;
+                    }
+                    case "message_deleted": {
+                        const mid = msg.id;
+                        // update wherever message exists
+                        for (const convId in state.messages) {
+                            const list = state.messages[convId];
+                            const idx = list.findIndex(x => String(x.id) === String(mid));
+                            if (idx >= 0) {
+                                list[idx].body = null;
+                                list[idx].deleted = true;
+                                renderMessages(convId);
+                                return;
+                            }
+                        }
+                        return;
                     }
                     default:
                         console.debug("[WS] event type not handled", msg.type);

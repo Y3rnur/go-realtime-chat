@@ -33,6 +33,11 @@ type Message struct {
 	// author info for convenience
 	AuthorName   *string `json:"author_name,omitempty"`
 	AuthorAvatar *string `json:"author_avatar,omitempty"`
+
+	// edit / delete metadata
+	EditedAt  *time.Time `json:"edited_at,omitempty"`
+	Deleted   bool       `json:"deleted,omitempty"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 type User struct {
@@ -111,7 +116,7 @@ func GetMessagesForConversation(ctx context.Context, pool *pgxpool.Pool, convID 
 	}
 
 	rows, err := pool.Query(ctx, `
-	SELECT m.id, m.conversation_id, m.author_id, m.body, m.created_at, u.display_name, u.avatar_url
+	SELECT m.id, m.conversation_id, m.author_id, m.body, m.created_at, m.edited_at, m.is_deleted, u.display_name, u.avatar_url
 	FROM (
 		SELECT * FROM messages
 		WHERE conversation_id = $1
@@ -129,7 +134,7 @@ func GetMessagesForConversation(ctx context.Context, pool *pgxpool.Pool, convID 
 	var out []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.AuthorID, &m.Body, &m.CreatedAt, &m.AuthorName, &m.AuthorAvatar); err != nil {
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.AuthorID, &m.Body, &m.CreatedAt, &m.EditedAt, &m.Deleted, &m.AuthorName, &m.AuthorAvatar); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -165,6 +170,39 @@ func SaveMessage(ctx context.Context, pool *pgxpool.Pool, convID, authorID uuid.
 	_ = pool.QueryRow(ctx, `SELECT display_name, avatar_url FROM users WHERE id = $1`, m.AuthorID).Scan(&m.AuthorName, &m.AuthorAvatar)
 
 	return m, nil
+}
+
+func UpdateMessage(ctx context.Context, pool *pgxpool.Pool, msgID, authorID uuid.UUID, newBody string) (Message, error) {
+	var m Message
+
+	err := pool.QueryRow(ctx, `
+		UPDATE messages
+		SET body = $1, edited_at = now()
+		WHERE id = $2 AND author_id = $3 AND is_deleted = FALSE
+		RETURNING id, conversation_id, author_id, body, created_at, edited_at, is_deleted, deleted_at
+	`, newBody, msgID, authorID).Scan(
+		&m.ID, &m.ConversationID, &m.AuthorID, &m.Body, &m.CreatedAt, &m.EditedAt, &m.Deleted, &m.DeletedAt,
+	)
+
+	if err != nil {
+		return m, err
+	}
+	_ = pool.QueryRow(ctx, `SELECT display_name, avatar_url FROM users WHERE id = $1`, m.AuthorID).Scan(&m.AuthorName, &m.AuthorAvatar)
+	return m, nil
+}
+
+func DeleteMessage(ctx context.Context, pool *pgxpool.Pool, msgID, actorID uuid.UUID) (uuid.UUID, error) {
+	var convID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		UPDATE messages
+		SET is_deleted = TRUE, deleted_at = now(), body = NULL
+		WHERE id = $1 AND author_id = $2 AND is_deleted = FALSE
+		RETURNING conversation_id
+	`, msgID, actorID).Scan(&convID)
+	if err != nil {
+		return convID, err
+	}
+	return convID, nil
 }
 
 // CreateConversation creates a conversation and inserts participants atomically.

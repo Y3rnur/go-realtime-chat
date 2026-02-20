@@ -15,6 +15,7 @@ import (
 	"github.com/Y3rnur/go-realtime-chat/backend"
 	"github.com/Y3rnur/go-realtime-chat/backend/store"
 	"github.com/Y3rnur/go-realtime-chat/backend/ws"
+	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -407,6 +408,88 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(saved)
+
+		case http.MethodPatch:
+			var req struct {
+				ID   string `json:"id"`
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			mid, err := uuid.Parse(req.ID)
+			if err != nil {
+				http.Error(w, "invalid message id", http.StatusBadRequest)
+				return
+			}
+			uidStr := backend.GetUserIDFromCtx(r.Context())
+			authorID, err := uuid.Parse(uidStr)
+			if err != nil {
+				http.Error(w, "invalid user", http.StatusUnauthorized)
+				return
+			}
+
+			updated, err := store.UpdateMessage(r.Context(), pool, mid, authorID, req.Body)
+			if err != nil {
+				if err == pgx.ErrNoRows {
+					http.Error(w, "forbidden or not found", http.StatusForbidden)
+					return
+				}
+				log.Printf("update message error: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+
+			// publish update to conversation channel
+			payload := map[string]interface{}{"type": "message_updated", "message": updated}
+			if err := hub.PublishMessage(updated.ConversationID.String(), payload); err != nil {
+				log.Printf("publish message_updated error: %v", err)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(updated)
+			return
+
+		case http.MethodDelete:
+			var req struct {
+				ID string `json:"id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			mid, err := uuid.Parse(req.ID)
+			if err != nil {
+				http.Error(w, "invalid message id", http.StatusBadRequest)
+				return
+			}
+			uidStr := backend.GetUserIDFromCtx(r.Context())
+			actorID, err := uuid.Parse(uidStr)
+			if err != nil {
+				http.Error(w, "invalid user", http.StatusUnauthorized)
+				return
+			}
+
+			convID, err := store.DeleteMessage(r.Context(), pool, mid, actorID)
+			if err != nil {
+				if err == pgx.ErrNoRows {
+					http.Error(w, "forbidden or not found", http.StatusForbidden)
+					return
+				}
+				log.Printf("delete message error: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+
+			// notify conversation subscribers
+			payload := map[string]interface{}{"type": "message_deleted", "id": mid.String()}
+			if err := hub.PublishMessage(convID.String(), payload); err != nil {
+				log.Printf("publish message_deleted error: %v", err)
+			}
+
+			w.WriteHeader(http.StatusNoContent)
+			return
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

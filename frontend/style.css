@@ -102,7 +102,12 @@ html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-s
 }
 
 /* Message bubbles */
-.msg{max-width:70%;padding:10px 12px;border-radius:12px;line-height:1.2}
+.msg{
+    display: inline-block;
+    max-width: 60%;
+    padding:10px 12px;border-radius:12px;line-height:1.2;
+    vertical-align: top;
+}
 .msg.me{margin-left:auto;background:var(--my-msg);border-bottom-right-radius:4px;color:white}
 .msg.them{background:var(--their-msg);border-bottom-left-radius:4px;color:var(--text)}
 .msg .time{display:block;font-size:0.75rem;color:rgba(255,255,255,0.6);margin-top:6px}
@@ -160,4 +165,142 @@ html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-s
 @media (max-width:720px){
     .auth-ui{right:8px;top:8px;padding:6px}
     .auth-input{width:100px}
+}
+
+/* Message actions */
+.msg { position: relative; padding-right: 12px; }
+
+.msg .text {
+    display: block;
+    margin-right: 25px;
+    word-break: break-word;
+}
+
+.msg-actions {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    z-index: 2;
+}
+
+.msg .msg-actions { display: none !important; }
+
+.msg-hover-trigger {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.02);
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity .12s ease, transform .08s ease;
+    z-index: 30;
+}
+.msg:hover .msg-hover-trigger { opacity: 1; transform: translateY(-1px); }
+.msg-hover-trigger::before { content: "⋯"; font-size: 16px; line-height: 1; }
+
+/* floating top-right menu */
+.msg-menu {
+    position: absolute;
+    right: 8px;
+    top: -44px;
+    display: none;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 8px;
+    background: rgba(6,8,12,0.95);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    z-index: 2000;
+}
+.msg-menu.open { display: flex; }
+.msg-menu button { border: none; padding: 6px 8px; border-radius: 6px; font-size: 13px; cursor: pointer; background: rgba(255,255,255,0.03); color: var(--text); }
+.msg-menu button.delete { background: rgba(255,80,80,0.12); color: #ffd7d7; }
+
+.msg { padding-bottom: 8px; }
+
+/* Buttons */
+.btn-edit, .btn-delete {
+    border: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: transform .08s ease, background-color .12s ease;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.25) inset;
+}
+
+.btn-edit {
+    background: rgba(255,255,255,0.06);
+    color: #e6eef9;
+}
+
+.btn-delete {
+    background: rgba(255, 80, 80, 0.12);
+    color: #ffd7d7;
+}
+
+.btn-edit:hover { transform: translateY(-1px); background: rgba(255,255,255,0.09); }
+.btn-delete:hover { transform: translateY(-1px); background: rgba(255,80,80,0.18); }
+
+/* Edited marker (separate element) */
+.edited {
+    display: inline-block;
+    margin-left: 1px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.75);
+    opacity: 0.95;
+    vertical-align: middle;
+}
+
+/* Deleted message look */
+.text.deleted {
+    font-style: italic;
+    color: rgba(255,255,255,0.78);
+    opacity: 0.9;
+}
+
+/* Hide action buttons for deleted messages */
+.msg .text.deleted + .msg-actions,
+.msg .text.deleted ~ .msg-actions {
+    display: none;
+}
+
+/* Inline editor styling */
+.inline-edit .edit-input {
+    width: 100%;
+    min-height: 64px;
+    resize: vertical;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.02);
+    color: #fff;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.inline-edit .save-edit, .inline-edit .cancel-edit {
+    margin-right: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+}
+
+.inline-edit .save-edit { background: #6b8cff; color: #fff; }
+.inline-edit .cancel-edit { background: rgba(255,255,255,0.06); color: #fff; }
+
+/* Responsive adjustments */
+@media (max-width: 720px) {
+    .msg { padding-right: 16px; }
+    .msg .text { margin-right: 64px; }
+    .btn-edit, .btn-delete { padding: 5px 8px; font-size: 11px; }
 }
