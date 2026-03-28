@@ -85,12 +85,16 @@ g_sel AS (
     UNION
     SELECT id FROM conversations WHERE is_group = TRUE AND title = 'Team' LIMIT 1
 )
-INSERT INTO conversation_participants (conversation_id, user_id, joined_at)
-SELECT gs.id, u.id, now() - (INTERVAL '1 day')
+INSERT INTO conversation_participants (conversation_id, user_id, joined_at, role)
+SELECT gs.id, u.id, now() - (INTERVAL '1 day'),
+    CASE
+        WHEN u.email = 'alice@example.test' THEN 'admin'
+        ELSE 'member'
+    END
 FROM g_sel gs
 CROSS JOIN users u
 WHERE u.email IN ('alice@example.test', 'bob@example.test', 'charlie@example.test')
-ON CONFLICT (conversation_id, user_id) DO NOTHING;
+ON CONFLICT (conversation_id, user_id) DO UPDATE SET role = EXCLUDED.role;
 
 -- Sending sample messages to 'Team' conversation
 WITH target_group AS (

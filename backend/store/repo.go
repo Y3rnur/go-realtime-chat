@@ -43,7 +43,129 @@ type Message struct {
 type User struct {
 	ID          uuid.UUID `json:"id"`
 	DisplayName *string   `json:"display_name,omitempty"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
 	Email       *string   `json:"email,omitempty"`
+}
+
+type ConversationInfo struct {
+	ID               uuid.UUID `json:"id"`
+	Title            *string   `json:"title,omitempty"`
+	Description      *string   `json:"description,omitempty"`
+	IsGroup          bool      `json:"is_group"`
+	ParticipantCount int       `json:"participant_count"`
+}
+
+type Participant struct {
+	UserID      uuid.UUID `json:"user_id"`
+	Role        string    `json:"role"`
+	JoinedAt    time.Time `json:"joined_at"`
+	DisplayName *string   `json:"display_name,omitempty"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
+}
+
+// GetUserByID returns basic user profile.
+func GetUserByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (User, error) {
+	var u User
+	err := pool.QueryRow(ctx, `SELECT id, display_name, avatar_url, email FROM users WHERE id = $1`, id).Scan(&u.ID, &u.DisplayName, &u.AvatarURL, &u.Email)
+	return u, err
+}
+
+// GetConversationInfo returns metadata and participant count for a conversation.
+func GetConversationInfo(ctx context.Context, pool *pgxpool.Pool, convID uuid.UUID) (ConversationInfo, error) {
+	var ci ConversationInfo
+	err := pool.QueryRow(ctx, `
+		SELECT c.id, c.title, c.description, c.is_group,
+			(SELECT COUNT(1) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
+		FROM conversations c
+		WHERE c.id = $1
+	`, convID).Scan(&ci.ID, &ci.Title, &ci.Description, &ci.IsGroup, &ci.ParticipantCount)
+	return ci, err
+}
+
+// GetParticipants returns paged participants with light user info.
+func GetParticipants(ctx context.Context, pool *pgxpool.Pool, convID uuid.UUID, limit, offset int) ([]Participant, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT cp.user_id, cp.role, cp.joined_at, u.display_name, u.avatar_url
+		FROM conversation_participants cp
+		JOIN users u ON u.id = cp.user_id
+		WHERE cp.conversation_id = $1
+		ORDER BY cp.joined_at ASC
+		LIMIT $2 OFFSET $3
+	`, convID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Participant
+	for rows.Next() {
+		var p Participant
+		if err := rows.Scan(&p.UserID, &p.Role, &p.JoinedAt, &p.DisplayName, &p.AvatarURL); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// IsUserAdmin checks whether a participant has admin role.
+func IsUserAdmin(ctx context.Context, pool *pgxpool.Pool, convID, userID uuid.UUID) (bool, error) {
+	var role string
+	err := pool.QueryRow(ctx, `
+		SELECT role FROM conversation_participants
+		WHERE conversation_id = $1 AND user_id = $2
+	`, convID, userID).Scan(&role)
+	if err != nil {
+		return false, err
+	}
+	return role == "admin" || role == "creator", nil
+}
+
+// AddParticipant inserts a user into conversation_participants.
+func AddParticipant(ctx context.Context, pool *pgxpool.Pool, convID, userID uuid.UUID, role string) error {
+	if role == "" {
+		role = "member"
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO conversation_participants (conversation_id, user_id, role, joined_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (conversation_id, user_id) DO NOTHING
+	`, convID, userID, role)
+	return err
+}
+
+// RemoveParticipant removes a user from a conversation.
+func RemoveParticipant(ctx context.Context, pool *pgxpool.Pool, convID, userID uuid.UUID) error {
+	_, err := pool.Exec(ctx, `
+		DELETE FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2
+	`, convID, userID)
+	return err
+}
+
+// UpdateConversationMeta updates title/description and returns updated info.
+func UpdateConversationMeta(ctx context.Context, pool *pgxpool.Pool, convID uuid.UUID, title *string, description *string) (ConversationInfo, error) {
+	var ci ConversationInfo
+	_, err := pool.Exec(ctx, `
+		UPDATE conversations
+		SET title = COALESCE($2, title), description = COALESCE($3, description)
+		WHERE id = $1
+	`, convID, title, description)
+	if err != nil {
+		return ci, err
+	}
+	return GetConversationInfo(ctx, pool, convID)
+}
+
+// BlockUser inserts into user_blocks.
+func BlockUser(ctx context.Context, pool *pgxpool.Pool, blocker, blocked uuid.UUID) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO user_blocks (blocker_id, blocked_id)
+		VALUES ($1, $2) ON CONFLICT DO NOTHING
+	`, blocker, blocked)
+	return err
 }
 
 // SearchUsersByDisplayName does a simple ILIKE lookup for display names.

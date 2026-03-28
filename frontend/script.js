@@ -151,7 +151,200 @@ function init() {
     composer.addEventListener("submit", onSend);
     document.getElementById("new-conv").addEventListener("click", (e) => { e.preventDefault(); openNewConversationModal(); });
     wireNewConversationModal();
+    wireConversationInfoModal();
     backBtn.addEventListener("click", () => sidebar.classList.add("open"));
+}
+
+// Conversation info modal logic
+function wireConversationInfoModal() {
+    const infoModal = document.getElementById('infoModal');
+    const infoModalBackdrop = document.getElementById('infoModalBackdrop');
+    const infoModalClose = document.getElementById('infoModalClose');
+    const infoTitle = document.getElementById('infoTitle');
+    const infoSubtitle = document.getElementById('infoSubtitle');
+    const infoAvatar = document.getElementById('infoAvatar');
+    const infoDescription = document.getElementById('infoDescription');
+    const infoActions = document.getElementById('infoActions');
+    const participantsList = document.getElementById('participantsList');
+    const participantsMore = document.getElementById('participantsMore');
+
+    let infoOpenConv = null;
+    let participantsOffset = 0;
+    const PARTICIPANTS_PAGE = 25;
+
+    function openConversationInfo(convId) {
+        if (!convId) return;
+        infoOpenConv = convId;
+        participantsOffset = 0;
+        participantsList.innerHTML = "";
+        infoModal.classList.remove('hidden');
+        infoModal.setAttribute('aria-hidden', 'false');
+        fetchConversationInfo(convId);
+        fetchParticipants(convId, PARTICIPANTS_PAGE, 0);
+    }
+
+    function closeConversationInfo() {
+        infoOpenConv = null;
+        participantsOffset = 0;
+        participantsList.innerHTML = "";
+        infoModal.classList.add('hidden');
+        infoModal.setAttribute('aria-hidden', 'true');
+    }
+
+    infoModalClose.addEventListener('click', closeConversationInfo);
+    infoModalBackdrop.addEventListener('click', closeConversationInfo);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeConversationInfo(); });
+
+    async function fetchConversationInfo(convId) {
+        try {
+            const res = await fetch(`/api/conversations/${convId}/info`, { credentials: 'same-origin' });
+            if (!res.ok) throw new Error('failed');
+            const info = await res.json();
+            renderConversationInfo(info);
+        } catch (err) {
+            showToast('Failed to load conversation info', 'error');
+        }
+    }
+
+    function renderConversationInfo(info) {
+        infoTitle.textContent = info.title || (info.is_group ? 'Group' : 'Conversation');
+        infoSubtitle.textContent = info.is_group ? `${info.participant_count} participants` : `Direct chat`;
+        infoAvatar.src = info.avatar_url || '/static/default-avatar.png';
+        infoDescription.textContent = info.description || '';
+
+        infoActions.innerHTML = '';
+        if (info.is_group) {
+            const editBtn = document.createElement('button');
+            editBtn.textContent = 'Edit title/description';
+            editBtn.className = 'conversation-info-edit-btn'
+            editBtn.addEventListener('click', async () => {
+                const newTitle = prompt('New title', info.title || '');
+                const newDesc = prompt('New description', info.description || '');
+                if (newTitle === null && newDesc === null) return;
+                try {
+                    const res = await fetch(`/api/conversations/${info.id}`, {
+                        method: 'PATCH',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: newTitle, description: newDesc }),
+                    });
+                    if (!res.ok) { showToast('Failed to update', 'error'); return; }
+                    const updated = await res.json();
+                    renderConversationInfo(updated);
+                    showToast('Updated conversation', 'success');
+                } catch (err) {
+                    showToast('Network error', 'error');
+                }
+            });
+            infoActions.appendChild(editBtn);
+        } else {
+            const msgBtn = document.createElement('button');
+            msgBtn.textContent = 'Message';
+            msgBtn.className = 'conversation-info-direct-message-btn';
+            msgBtn.addEventListener('click', () => {
+                closeConversationInfo();
+                openConversation(info.id);
+            })
+            infoActions.appendChild(msgBtn);
+        }
+    }
+
+    async function fetchParticipants(convId, limit = 25, offset = 0) {
+        try {
+            const res = await fetch(`/api/conversations/${convId}/participants?limit=${limit}&offset=${offset}`, { credentials: 'same-origin'} );
+            if (!res.ok) throw new Error('failed');
+            const list = await res.json();
+            renderParticipants(list, offset === 0);
+            participantsOffset += list.length;
+            if (list.length === limit) {
+                participantsMore.innerHTML = '';
+                const moreBtn = document.createElement('button');
+                moreBtn.textContent = 'Load more';
+                moreBtn.addEventListener('click', () => { fetchParticipants(convId, limit, participantsOffset); });
+                participantsMore.appendChild(moreBtn);
+            } else {
+                participantsMore.innerHTML = '';
+            }
+        } catch (err) {
+            showToast('Failed to load participants', 'error');
+        }
+    }
+
+    function renderParticipants(list, replace = false) {
+        if (replace) participantsList.innerHTML = '';
+        for (const p of list) {
+            const row = document.createElement('div');
+            row.className = 'participant-row';
+            row.innerHTML = `
+                <img class="participant-avatar" src="${p.avatar_url || '/static/defaul-avatar.png'}" alt="">
+                <div class="participant-info">
+                    <div class="participant-name">${escapeHtml(p.display_name || 'Unknown')}</div>
+                    <div class="participant-meta">${escapeHtml(p.role || 'member')} • ${new Date(p.joined_at).toLocaleString()}</div>
+                </div>
+                <div class="participant-actions"></div>
+            `;
+            const actions = row.querySelector('.participant-actions');
+            const me = state.me;
+            if (String(p.user_id) !== String(me)) {
+                // blocking feature
+                const blockBtn = document.createElement('button');
+                blockBtn.textContent = 'Block';
+                blockBtn.className = 'conversation-info-block-btn';
+                blockBtn.addEventListener('click', async () => {
+                    if (!confirm(`Block ${p.display_name || 'user'}?`)) return;
+                    try {
+                        const res = await fetch(`/api/users/${p.user_id}/block`, {method: 'POST', credentials: 'same-origin' });
+                        const body = await res.text().catch(()=>"");
+                        if (res.ok) { 
+                            showToast('User blocked', 'success'); 
+                        } else { 
+                            console.debug("POST /api/users/:id/block failed", res.status, body);
+                            showToast('Failed to block', 'error'); 
+                        }
+                    } catch (err) { 
+                        showToast('Network error', 'error'); 
+                    }
+                });
+                actions.appendChild(blockBtn);
+            } else {
+                // leaving from the group (self remove)
+                if (infoOpenConv) {
+                    const leaveBtn = document.createElement('button');
+                    leaveBtn.textContent = 'Leave';
+                    leaveBtn.className = 'conversation-info-leave-btn';
+                    leaveBtn.addEventListener('click', async () => {
+                        if (!confirm('Leave conversation?')) return;
+                        try {
+                            const res = await fetch(`/api/conversations/${infoOpenConv}/participants/${me}`, { method: 'DELETE', credentials: 'same-origin' });
+                            if (res.status === 204) { showToast('Left conversation', 'success'); closeConversationInfo(); } else showToast('Failed to leave', 'error');
+                        } catch (_) { showToast('Network error', 'error'); }
+                    });
+                    actions.appendChild(leaveBtn);
+                }
+            }
+            participantsList.appendChild(row);
+        }
+    }
+
+    // expose handler for WS messages so existing WS listener can call it
+    window.handleWsInfoEvents = function(msg) {
+        if (!infoOpenConv) return;
+        if (msg.type === 'conversation_updated' && msg.conversation && String(msg.conversation.id) === String(infoOpenConv)) {
+            renderConversationInfo(msg.conversation);
+        }
+        if ((msg.type === 'participant_added' || msg.type === 'participant_removed') && String(msg.conversation_id) === String(infoOpenConv)) {
+            participantsOffset = 0;
+            fetchParticipants(infoOpenConv, PARTICIPANTS_PAGE, 0);
+        }
+    };
+
+    // attaching header click to open modal for current conversation
+    const chatHeaderTitle = document.querySelector('.chat-title');
+    if (chatHeaderTitle) {
+        chatHeaderTitle.addEventListener('click', () => {
+            if (state.active) openConversationInfo(state.active);
+        });
+    }
 }
 
 // New conversation modal logic
@@ -189,7 +382,7 @@ function renderSelectedParticipants() {
 
 let ncSearchTimer = null;
 
-// wire modal buttons (also called from init)
+// wire New Conversation modal buttons (also called from init)
 function wireNewConversationModal() {
     const ncCancel = document.getElementById("nc-cancel");
     const ncCreate = document.getElementById("nc-create");
@@ -400,11 +593,12 @@ function renderConversations() {
     }
     for (const c of state.convs) {
         const display = c.is_group ? (c.title || "Group") : (c.display_name || (c.title || "Direct"));
+        const avatarSrc = c.avatar_url || c.display_avatar || c.partner_avatar || '/static/default-avatar.png';
         const li = document.createElement("li");
         li.className = c.id === state.active ? "active" : "";
         li.tabIndex = 0;
         li.innerHTML = `
-            <img class="avatar" src="https://via.placeholder.com/40" alt="avatar" />
+            <img class="avatar" src="${escapeHtml(avatarSrc)}" alt="avatar" />
             <div class="conv-meta">
                 <div class="name">${escapeHtml(display)}</div>
                 <div class="last"></div>

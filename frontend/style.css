@@ -304,3 +304,67 @@ html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-s
     .msg .text { margin-right: 64px; }
     .btn-edit, .btn-delete { padding: 5px 8px; font-size: 11px; }
 }
+
+.modal.hidden { display: none; }
+.modal { position: fixed; inset: 0; z-index: 9999; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+.modal-panel { position: absolute; right: 40px; top: 40px; width: 420px; background: var(--panel-bg); border-radius: 12px; padding: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+.modal-close { position: absolute; right: 8px; top: 8px; background: transparent; border: none; color: var(--text); cursor: pointer; }
+.info-header { display:flex; gap:12px; align-items:center; margin-bottom:8px; }
+.info-avatar, .participant-avatar { width:48px; height:48px; border-radius:8px; object-fit:cover; }
+.info-title { font-weight:700; font-size:16px; }
+.info-subtitle { font-size:13px; color:rgba(255,255,255,0.66); }
+.info-desc { margin: 8px 0; color: rgba(255,255,255,0.85); }
+.info-actions { display:flex; gap:8px; margin-bottom:8px; }
+.participants-list { display:flex; flex-direction:column; gap:8px; max-height:320px; overflow:auto; }
+.participant-row { display:flex; gap:12px; align-items:center; padding:6px; border-radius:8px; background: rgba(255,255,255,0.02); }
+.participant-info { flex:1; }
+.participant-name { font-weight:600; }
+.participant-meta { font-size:12px; color: rgba(255,255,255,0.6); }
+
+.conversation-info-edit-btn, .conversation-info-direct-message-btn {
+    background-color: #0a254f;
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.conversation-info-edit-btn:hover, .conversation-info-direct-message-btn:hover {
+    background-color: #102d6b;
+}
+
+button.conversation-info-block-btn, button.conversation-info-leave-btn {
+    background-color: #f0f0f0; /* Give it a light background so black text is visible */
+    color: #000000 !important; /* Force it to be black */
+    border: none;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+button.conversation-info-block-btn:hover, button.conversation-info-leave-btn:hover {
+    background-color: #d1d1d1;
+}
+
+/* Modal improvements: ensure solid readable panel and higher z-index */
+.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(3px); pointer-events:auto; }
+.modal-panel {
+    position: absolute;
+    right: 24px;
+    top: 24px;
+    width: 420px;
+    background: linear-gradient(180deg, #0f1724, #08111a); /* stronger opaque bg */
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.7);
+    z-index: 10010;
+    pointer-events: auto;
+    border: 1px solid rgba(255,255,255,0.03);
+}
+
+/* ensure modal content is readable over dimmed page */
+.modal-panel * { color: var(--text); }

@@ -1,0 +1,6 @@
+ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS description TEXT;
+
+ALTER TABLE conversation_participants
+    ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member',
+    ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT now();

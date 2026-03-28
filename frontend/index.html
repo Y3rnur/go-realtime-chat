@@ -82,5 +82,30 @@
             </div>
             <div class="modal-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.5)"></div>
         </div>
+        <!-- Conversation Info Modal-->
+        <div id="infoModal" class="modal hidden" role="dialog" aria-hidden="true">
+            <div class="modal-backdrop" id="infoModalBackdrop"></div>
+            <div class="modal-panel" role="document" id="infoModalPanel">
+                <button id="infoModalClose" class="modal-close" aria-label="Close">✕</button>
+                <div id="infoModalContent">
+                    <!-- header -->
+                    <div class="info-header">
+                        <img id="infoAvatar" class="info-avatar" src="" alt="avatar" />
+                        <div>
+                            <div id="infoTitle" class="info-title"></div>
+                            <div id="infoSubtitle" class="info-subtitle"></div>
+                        </div>
+                    </div>
+                    <!-- body -->
+                    <div id="infoBody">
+                        <p id="infoDescription" class="info-desc"></p>
+                        <div class="info-actions" id="infoActions"></div>
+                        <h4>Participants</h4>
+                        <div id="participantsList" class="participants-list"></div>
+                        <div id="participantsMore" class="participants-more"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </body>
 </html>

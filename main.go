@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 	"github.com/Y3rnur/go-realtime-chat/backend/store"
 	"github.com/Y3rnur/go-realtime-chat/backend/ws"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -53,6 +55,8 @@ func main() {
 	defer hub.Close()
 
 	mux := http.NewServeMux()
+
+	registerConversationInfoHandlers(mux, pool, hub)
 
 	// websocket endpoint
 	mux.HandleFunc("/ws", hub.ServeWS)
@@ -509,4 +513,169 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// registerConversationInfoHandlers handles the conversation info requests
+func registerConversationInfoHandlers(mux *http.ServeMux, pool *pgxpool.Pool, hub *ws.Hub) {
+	mux.Handle("/api/conversations/", backend.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
+		if path == "" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var idStr, rest string
+		if i := strings.Index(path, "/"); i >= 0 {
+			idStr = path[:i]
+			rest = strings.TrimPrefix(path[i+1:], "/")
+		} else {
+			idStr = path
+			rest = ""
+		}
+		convID, err := uuid.Parse(idStr)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		switch {
+		// GET  /api/conversations/<id>/info
+		case rest == "info" && r.Method == http.MethodGet:
+			ci, err := store.GetConversationInfo(r.Context(), pool, convID)
+			if err != nil {
+				if err == pgx.ErrNoRows {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				log.Printf("get conv info: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ci)
+			return
+
+		// GET  /api/conversations/<id>/participants?limit=&offset=
+		case strings.HasPrefix(rest, "participants") && r.Method == http.MethodGet:
+			q := r.URL.Query()
+			lim, _ := strconv.Atoi(q.Get("limit"))
+			if lim <= 0 {
+				lim = 50
+			}
+			off, _ := strconv.Atoi(q.Get("offset"))
+			parts, err := store.GetParticipants(r.Context(), pool, convID, lim, off)
+			if err != nil {
+				log.Printf("get participants: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(parts)
+			return
+
+		// POST /api/conversations/<id>/participants    (body: { user_id, role })  (admin)
+		case strings.HasPrefix(rest, "participants") && r.Method == http.MethodPost:
+			var req struct {
+				UserID string `json:"user_id"`
+				Role   string `json:"role"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			newUID, err := uuid.Parse(req.UserID)
+			if err != nil {
+				http.Error(w, "invalid user id", http.StatusBadRequest)
+				return
+			}
+			actorStr := backend.GetUserIDFromCtx(r.Context())
+			actorID, _ := uuid.Parse(actorStr)
+			isAdmin, err := store.IsUserAdmin(r.Context(), pool, convID, actorID)
+			if err != nil || !isAdmin {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if req.Role == "" {
+				req.Role = "member"
+			}
+			if err := store.AddParticipant(r.Context(), pool, convID, newUID, req.Role); err != nil {
+				log.Printf("add participant: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			// publish participant_added event
+			payload := map[string]interface{}{"type": "participant_added", "conversation_id": convID.String(), "user_id": newUID.String(), "role": req.Role}
+			if hub != nil {
+				_ = hub.PublishEvent(convID.String(), payload)
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+
+		// DELETE /api/conversations/<id>/participants/<user_id>  (admin or self)
+		case strings.HasPrefix(rest, "participants/") && r.Method == http.MethodDelete:
+			// expected path here "participants/<user_id>"
+			parts := strings.SplitN(rest, "/", 2)
+			if len(parts) < 2 {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			targetID, err := uuid.Parse(parts[1])
+			if err != nil {
+				http.Error(w, "invalid user id", http.StatusBadRequest)
+				return
+			}
+			actorStr := backend.GetUserIDFromCtx(r.Context())
+			actorID, _ := uuid.Parse(actorStr)
+			if actorID != targetID {
+				isAdmin, err := store.IsUserAdmin(r.Context(), pool, convID, actorID)
+				if err != nil || !isAdmin {
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
+				}
+			}
+			if err := store.RemoveParticipant(r.Context(), pool, convID, targetID); err != nil {
+				log.Printf("remove participant: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			payload := map[string]interface{}{"type": "participant_removed", "conversation_id": convID.String(), "user_id": targetID.String()}
+			if hub != nil {
+				_ = hub.PublishEvent(convID.String(), payload)
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+
+		// PATCH  /api/conversations/<id>  (body: { title?, description? }) (admin)
+		case rest == "" && r.Method == http.MethodPatch:
+			var req struct {
+				Title       *string `json:"title"`
+				Description *string `json:"description"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			actorStr := backend.GetUserIDFromCtx(r.Context())
+			actorID, _ := uuid.Parse(actorStr)
+			isAdmin, err := store.IsUserAdmin(r.Context(), pool, convID, actorID)
+			if err != nil || !isAdmin {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			updated, err := store.UpdateConversationMeta(r.Context(), pool, convID, req.Title, req.Description)
+			if err != nil {
+				log.Printf("update conv meta: %v", err)
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			payload := map[string]interface{}{"type": "conversation_updated", "conversation": updated}
+			if hub != nil {
+				_ = hub.PublishEvent(convID.String(), payload)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(updated)
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	})))
 }
