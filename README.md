@@ -39,7 +39,16 @@ Now after we have ensured that above things are configured, there is the Makefil
 By running `make run` or `make start`, you can start the Go web server. You can look for terminal window's logs to be ensured that server is running.
 When server starts successfully, you can visit the "http://localhost:8080" and use the above mentioned email and password for sample users and interact with the website.
 
-CONTAINERIZED SETUP (in plan):
-> **Note:** Docker support will come soon, which will automate the setup of the database and services with a single command.
+CONTAINERIZED SETUP:
+Now you can also run this project with Docker. For this, you need these things:
+- **Docker & Docker Compose**
+- **Make**
+
+After cloning this repo, you can run the following command to initialize the `.env`, build the images, and start the services:
+```bash
+make setup
+```
+
+For other available commands, you can run `make help` for the list of `make` commands.
 
 In case you have troubles, I would recommend to find the solutions from the Internet.
