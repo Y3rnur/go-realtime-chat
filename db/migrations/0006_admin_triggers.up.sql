@@ -8,7 +8,9 @@ BEGIN
     IF (TG_OP = 'INSERT') OR (TG_OP = 'UPDATE' AND NEW.user_id <> OLD.user_id) THEN
         IF EXISTS (
             SELECT 1 FROM conversations
-            WHERE id = NEW.conversation_id AND created_by = NEW.user_id
+            WHERE id = NEW.conversation_id
+                AND created_by = NEW.user_id
+                AND is_group = TRUE
         ) THEN
             NEW.role := 'admin';
         END IF;

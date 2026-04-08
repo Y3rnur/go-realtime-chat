@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: go_chat_postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-chatuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-chatpass}
+      POSTGRES_DB: ${DB_NAME:-go_chat}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-chatuser} -d ${DB_NAME:-go_chat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: go_chat_redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redispass}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: go_chat_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://chatuser:chatpass@postgres:5432/go_chat?sslmode=disable"
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: chatuser
+      DB_NAME: go_chat
+      DB_PASSWORD: chatpass
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass}
+      JWT_SECRET: ${JWT_SECRET:-something-secret-key}
+    ports:
+      - "8080:8080"
+
+  migrate:
+    image: postgres:15-alpine
+    container_name: go_chat_migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+    - ./db/migrations:/migrations:ro
+    - ./db/seeds:/seeds:ro
+    entrypoint: ["sh", "-c"]
+    command: >
+      "
+      set -e;
+      until pg_isready -h postgres -p 5432 -U $${DB_USER:-chatuser}; do
+        echo 'Waiting for postgres...';
+        sleep 1;
+      done;
+
+      for f in /migrations/*up.sql; do
+        if [ -e \"$$f\" ]; then
+          echo \"Applying migration: $$f\";
+          psql $$DATABASE_URL -f \"$$f\";
+        fi;
+      done;
+
+      if [ -f /seeds/dev_seed.sql ]; then
+        echo 'Seeding database...';
+        psql $$DATABASE_URL -f /seeds/dev_seed.sql;
+      fi;
+      "
+    restart: "no"
+
+volumes:
+  postgres_data:
+  redis_data:

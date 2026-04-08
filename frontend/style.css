@@ -59,10 +59,27 @@ html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-s
     min-width:0;
 }
 .chat-header{display:flex;align-items:center;padding:12px;border-bottom:1px solid rgba(255,255,255,0.03)}
-.chat-title{display:flex;gap:12px;align-items:center}
-.chat-title .avatar{width:44px;height:44px;border-radius:50%;object-fit:cover}
-.chat-title .name{font-weight:700}
-.chat-title .sub{font-size:0.85rem;color:var(--muted)}
+.chat-title {
+    display:flex;
+    gap:12px;
+    align-items:center;
+
+    flex-grow: 1;
+    margin-right: 115px;
+
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 8px;
+    transition: background 0.2s ease;
+}
+
+.chat-title:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.chat-title .avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;}
+.chat-title .name{font-weight:700;}
+.chat-title .sub{font-size:0.85rem;color:var(--muted);}
 
 /* Messages list */
 .messages {
