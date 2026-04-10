@@ -2,27 +2,64 @@
 
 A small, opinionated skeleton for a realtime web chat application with a Go backend and a lightweight frontend. This repository contains an initial frontend layout (HTML/CSS/JS) and space to add a Go-based WebSocket server and persistence later.
 
-**⚠️ Crucial note — In progress:**  
-This project is under active development and currently only provides a starting skeleton. It is not an MVP or production-ready reference. Expect missing features, changing APIs, and incomplete server code. If you clone the repo, treat it as work-in-progress learning material rather than a finished product.
+**⚠️ Crucial note — In progress (but main features done):**  
+This project is under active development but more or less implemented core features needed. It is not an MVP or production-ready reference. Expect missing features, changing APIs, and incomplete server code. If you clone the repo, treat it as work-in-progress learning material rather than a finished product.
 
 I will try to add features slowly and update this README.md, so anyone can know which features are included and not included.
 
 **Current Features:**
 Currently, this project has a backend server that serves some API calls for creating conversations and messages(and other handlers) and the use of tools like Websocket and Redis (for realtime communication features). Also, project features clean, minimalistic UI introduced on the frontend and the logic for sending certain requests/events to the backend and corresponding response change for the user's webpage. The project processes authentication via JWT and cookies. User registration is planned for future update.
 
+**Demonstration of Current Features:**
+
+                                            ⚡Real-Time Messaging & Presence 
+<p align="center">
+<img src="./assets/real_time_demo.gif" width="800px" alt="Real-time Chat Demo" />
+</p>
+
+                                            🔐Authentication & Conversation Controls
+<p align="center">
+<img src="./assets/conversation_control_demo.gif" width="800px" alt="Authentication Flow" />
+</p>
+
+                                            🛠️Message Control
+<p align="center">
+<img src="./assets/message_control_demo.gif" width="800px" alt="CRUD Operations Demo" />
+</p>
+
 **Notes after introduction of JWT:**
+
 If you try to test the users and their conversations/messages, you can use six test(seed) accounts currently.
+
 email: alice@example.test   password: password123
+
 email: bob@example.test     password: password123
+
 email: charlie@example.test password: password123
+
 email: dave@example.test    password: password123
+
 email: eve@example.test     password: password123
+
 email: frank@example.test   password: password123
 
 For now, there is no registration feature included. I will try to add it on future.
 
 **Notes on running the server:**
+
 I will add more details in future how to run the application properly (I apologize for inconvenience), but here are some important things to know.
+
+🐳CONTAINERIZED SETUP:
+Now you can also run this project with Docker. For this, you need these things:
+- **Docker & Docker Compose**
+- **Make**
+
+After cloning this repo, you can run the following command to initialize the `.env`, build the images, and start the services:
+```bash
+make setup
+```
+
+For other available commands, you can run `make help` for the list of `make` commands.
 
 LOCAL SETUP:
 Currently, you can run the server locally. To run it, you must install below things:
@@ -38,17 +75,5 @@ Now after we have ensured that above things are configured, there is the Makefil
 
 By running `make run` or `make start`, you can start the Go web server. You can look for terminal window's logs to be ensured that server is running.
 When server starts successfully, you can visit the "http://localhost:8080" and use the above mentioned email and password for sample users and interact with the website.
-
-CONTAINERIZED SETUP:
-Now you can also run this project with Docker. For this, you need these things:
-- **Docker & Docker Compose**
-- **Make**
-
-After cloning this repo, you can run the following command to initialize the `.env`, build the images, and start the services:
-```bash
-make setup
-```
-
-For other available commands, you can run `make help` for the list of `make` commands.
 
 In case you have troubles, I would recommend to find the solutions from the Internet.

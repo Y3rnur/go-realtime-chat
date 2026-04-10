@@ -21,6 +21,7 @@ type Conversation struct {
 	IsGroup     bool      `json:"is_group"`
 	CreatedAt   time.Time `json:"created_at"`
 	DisplayName *string   `json:"display_name,omitempty"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
 }
 
 type Message struct {
@@ -204,12 +205,26 @@ func GetConversationsForUser(ctx context.Context, pool *pgxpool.Pool, userID uui
 
 	rows, err := pool.Query(ctx, `
 	SELECT c.id, c.title, c.is_group, c.created_at,
-		(
-			SELECT u.display_name FROM conversation_participants cp2
-			JOIN users u ON u.id = cp2.user_id
-			WHERE cp2.conversation_id = c.id AND cp2.user_id <> $1
-			LIMIT 1
-		) as display_name
+		CASE
+			WHEN c.is_group THEN NULL
+			ELSE (
+				SELECT u.display_name
+				FROM conversation_participants cp2
+				JOIN users u ON u.id = cp2.user_id
+				WHERE cp2.conversation_id = c.id AND cp2.user_id <> $1
+				LIMIT 1
+			)
+		END AS display_name,
+		CASE
+			WHEN c.is_group THEN c.avatar_url
+			ELSE (
+				SELECT u.avatar_url
+				FROM conversation_participants cp2
+				JOIN users u ON u.id = cp2.user_id
+				WHERE cp2.conversation_id = c.id AND cp2.user_id <> $1
+				LIMIT 1
+			)
+		END AS avatar_url
 	FROM conversation_participants cp
 	JOIN conversations c ON c.id = cp.conversation_id
 	WHERE cp.user_id = $1
@@ -223,7 +238,7 @@ func GetConversationsForUser(ctx context.Context, pool *pgxpool.Pool, userID uui
 	var out []Conversation
 	for rows.Next() {
 		var c Conversation
-		if err := rows.Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt, &c.DisplayName); err != nil {
+		if err := rows.Scan(&c.ID, &c.Title, &c.IsGroup, &c.CreatedAt, &c.DisplayName, &c.AvatarURL); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

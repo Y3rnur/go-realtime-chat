@@ -606,6 +606,11 @@ function renderConversations() {
         `;
         li.addEventListener("click", () => openConversation(c.id));
         conversationsEl.appendChild(li);
+
+        const imgEl = li.querySelector('img.avatar');
+        if (imgEl) {
+            imgEl.addEventListener('error', () => { imgEl.src = '/static/default-avatar.png'; });
+        }
     }
 }
 
@@ -643,6 +648,33 @@ async function openConversation(id) {
         state.messages[id] = data;
         const conv = state.convs.find((x) => x.id === id);
         chatNameEl.textContent = conv?.title || "Conversation";
+
+        // updating chat header avatar
+        const chatAvatarEl = document.getElementById('chat-avatar');
+        if (chatAvatarEl) {
+        let headerAvatar = conv?.avatar_url || conv?.avatar || conv?.display_avatar || conv?.partner_avatar || null;
+
+        if (!headerAvatar && !conv?.is_group) {
+            // try to fetch participants and pick the other participant's avatar
+            try {
+            const res = await fetch(`/api/conversations/${id}/participants?limit=5&offset=0`, { credentials: 'same-origin' });
+            if (res.ok) {
+                const parts = await res.json();
+                const other = parts.find(p => String(p.user_id) !== String(state.me));
+                if (other && other.avatar_url) headerAvatar = other.avatar_url;
+            } else {
+                console.debug("participants fetch failed:", res.status);
+            }
+            } catch (err) {
+            console.debug("participants fetch error for avatar:", err);
+            }
+        }
+
+        headerAvatar = headerAvatar || '/static/default-avatar.png';
+        chatAvatarEl.src = headerAvatar;
+        chatAvatarEl.alt = conv?.title || conv?.display_name || 'Conversation';
+        chatAvatarEl.onerror = () => { chatAvatarEl.src = '/static/default-avatar.png'; };
+        }
         renderMessages(id, { scrollToBottom: true});
 
         try {
