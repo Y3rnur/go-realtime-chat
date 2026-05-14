@@ -120,6 +120,14 @@ function init() {
     authForm = document.getElementById("auth-form");
     authInfo = document.getElementById("auth-info");
     authName = document.getElementById("auth-name");
+    // Register elements
+    const authRegisterBtn = document.getElementById("auth-register");
+    const regModal = document.getElementById("registerModal");
+    const regCancel = document.getElementById("reg-cancel");
+    const regCreate = document.getElementById("reg-create");
+    const regEmail = document.getElementById("reg-email");
+    const regDisplay = document.getElementById("reg-display");
+    const regPassword = document.getElementById("reg-password");
 
     if (authLoginBtn) {
         authLoginBtn.addEventListener("click", async () => {
@@ -134,6 +142,70 @@ function init() {
             logout();
         });
     }
+
+    if (authRegisterBtn) {
+        authRegisterBtn.addEventListener("click", () => {
+        const modal = regModal || document.getElementById("registerModal") || document.getElementById("RegisterModal");
+        if (!modal) { console.warn("register modal not found"); return; }
+        modal.style.display = "block";
+        if (regEmail) regEmail.focus();
+        });
+    }
+    if (regCancel) regCancel.addEventListener("click", () => {
+        const modal = regModal || document.getElementById("registerModal") || document.getElementById("RegisterModal");
+        if (modal) modal.style.display = "none";
+        });
+    if (regCreate) {
+        regCreate.addEventListener("click", async () => {
+            const email = (regEmail.value || "").trim();
+            const display = (regDisplay.value || "").trim();
+            const pw = regPassword.value || "";
+
+            // basic client-side validation
+            if (!email) return alert("Email required");
+            if (pw.length < 8) return alert("Password must be at least 8 characters");
+            const pwPolicy = /(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=[\]{};':\"\\|,.<>/?]).{8,}/;
+            if (!pwPolicy.test(pw)) return alert("Password must include uppercase, lowercase, digit and special character");
+
+            try {
+                regCreate.disabled = true;
+                const res = await fetch("/api/register", {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email, password: pw, display_name: display || null })
+                });
+                if (!res.ok) {
+                    const txt = await res.text().catch(()=>"");
+                    regCreate.disabled = false;
+                    if (res.status === 409) return alert("Email already registered");
+                    return alert("Registration failed: " + (txt || res.status));
+                }
+                const data = await res.json();
+                // mimic login success handling
+                if (data && data.user && data.user.id) {
+                    state.me = data.user.id;
+                    if (data.user.display_name) state.users[state.me] = data.user.display_name;
+                    if (authForm && authInfo && authName) {
+                        authForm.style.display = "none";
+                        authInfo.style.display = "inline-block";
+                        authName.textContent = data.user.display_name || state.me;
+                    }
+                    regModal.style.display = "none";
+                    showToast("Successful registration!", "success", 3000);
+                    await loadConversations();
+                } else {
+                    showToast("Registration succeeded but failed to retrieve profile", "info");
+                }
+            } catch (err) {
+                console.error("register error", err);
+                alert("Registration error");
+            } finally {
+                regCreate.disabled = false;
+            }
+        });
+    }
+
 
     (async () => {
         const ok = await refreshAccess();

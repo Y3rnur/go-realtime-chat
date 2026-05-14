@@ -67,6 +67,8 @@ func main() {
 	mux.Handle("/api/logout", backend.LogoutHandler(pool))
 	// auth: refresh (rotates refresh token & issues new access token)
 	mux.Handle("/api/refresh", backend.RefreshHandler(pool))
+	// auth: register (registers user and returns token + cookie)
+	mux.Handle("/api/register", backend.RegisterHandler(pool))
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

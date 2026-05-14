@@ -425,6 +425,127 @@ func LogoutHandler(pool *pgxpool.Pool) http.Handler {
 	})
 }
 
+// RegisterHandler creates a new user, sets auth cookies and returns user info.
+// Expected JSON: { "email: "...", "password": "...", "display_name": "..." }
+func RegisterHandler(pool *pgxpool.Pool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email       string  `json:"email"`
+			Password    string  `json:"password"`
+			DisplayName *string `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		req.Email = strings.TrimSpace(req.Email)
+		if req.Email == "" || len(req.Password) < 8 {
+			http.Error(w, "email and password required (min 8 chars)", http.StatusBadRequest)
+			return
+		}
+
+		// perform basic password policy server-side
+		var hasUpper, hasLower, hasDigit, hasSpecial bool
+		for _, c := range req.Password {
+			switch {
+			case 'A' <= c && c <= 'Z':
+				hasUpper = true
+			case 'a' <= c && c <= 'z':
+				hasLower = true
+			case '0' <= c && c <= '9':
+				hasDigit = true
+			case strings.ContainsRune("!@#$%^&*()-_=+[]{}|;:',.<>?/`~\"\\", c):
+				hasSpecial = true
+
+			}
+		}
+		if !(hasUpper && hasLower && hasDigit && hasSpecial) {
+			http.Error(w, "password must include uppercase, lowercase, digit, and special character", http.StatusBadRequest)
+			return
+		}
+
+		// hash password
+		pwHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+
+		// insert user row
+		var id string
+		err = pool.QueryRow(r.Context(), `
+			INSERT INTO users (id, email, password_hash, display_name, created_at, is_verified)
+			VALUES (gen_random_uuid(), $1, $2, $3, now(), false)
+			RETURNING id::text
+		`, req.Email, string(pwHash), req.DisplayName).Scan(&id)
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique") {
+				http.Error(w, "email already registered", http.StatusConflict)
+				return
+			}
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+
+		// create access token + refresh token & set cookies
+		token, err := GenerateJWTWithExpiry(id, req.Email, func() string {
+			if req.DisplayName != nil {
+				return *req.DisplayName
+			}
+			return ""
+		}(), accessTokenTTL)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		accessCookie := &http.Cookie{
+			Name:     "access_token",
+			Value:    token,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+			Expires:  time.Now().Add(accessTokenTTL),
+		}
+		if r.TLS != nil {
+			accessCookie.Secure = true
+		}
+		http.SetCookie(w, accessCookie)
+
+		refreshRaw, err := createRefreshToken(pool, id)
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		refreshCookie := &http.Cookie{
+			Name:     "refresh_token",
+			Value:    refreshRaw,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+			Expires:  time.Now().Add(refreshTokenTTL),
+		}
+		if r.TLS != nil {
+			refreshCookie.Secure = true
+		}
+		http.SetCookie(w, refreshCookie)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"token": token,
+			"user": map[string]interface{}{
+				"id":    id,
+				"email": req.Email,
+				"display_name": func() string {
+					if req.DisplayName != nil {
+						return *req.DisplayName
+					}
+					return ""
+				}(),
+			},
+		})
+	})
+}
+
 // small type to scan nullable display names
 type sqlNullString struct {
 	String string

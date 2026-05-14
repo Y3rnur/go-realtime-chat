@@ -16,6 +16,7 @@
                         <input id="auth-email" class="auth-input" type="email" placeholder="Email" />
                         <input id="auth-pw" class="auth-input" type="password" placeholder="Password" />
                         <button id="auth-login" class="auth-btn">Login</button>
+                        <button id="auth-register" class="auth-btn" style="background:transparent;border:1px solid rgba(255,255,255,0.06)">Register</button>
                     </div>
                     <div id="auth-info" class="auth-info" style="display:none;">
                         <span id="auth-name" class="auth-name"></span>
@@ -106,6 +107,26 @@
                     </div>
                 </div>
             </div>
+        </div>
+        <!-- Register Modal -->
+        <div id="registerModal" class="modal" style="display:none;">
+            <div class="modal-content" role="dialog" aria-modal="true" style="max-width:480px;padding:16px;background:#0f1720;color:#fff;border-radius:8px;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10000;">
+                <h3>Register</h3>
+                <label>Email
+                    <input id="reg-email" type="email" style="width:100%;padding:8px;margin:6px 0;">
+                </label>
+                <label>Display name (optional)
+                    <input id="reg-display" type="text" style="width:100%;padding:8px;margin:6px 0;">
+                </label>
+                <label>Password
+                    <input id="reg-password" type="password" style="width:100%;padding:8px;margin:6px 0;">
+                </label>
+                <div style="margin-top:12px;text-align:right;">
+                    <button id="reg-cancel" style="margin-right:8px;padding:8px 12px;">Cancel</button>
+                    <button id="reg-create" style="padding:8px 12px;background:#10b981;color:#fff;border:none;border-radius:4px;">Register</button>
+                </div>
+            </div>
+            <div class="modal-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.5)"></div>
         </div>
     </body>
 </html>
